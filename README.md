@@ -16,6 +16,8 @@ CalDAV sync is a matter of pointing `vdirsyncer` at the same directory.
   being flattened on save.
 - **Picks up external changes.** A debounced filesystem watch means a `vdirsyncer` run or an edit
   in another app shows up without a restart.
+- **Reminders** as desktop notifications, honouring each event's own `VALARM`,
+  with an optional app-wide default for events that carry none.
 - **Frosted glass**, following the COSMIC 1.3+ blur styling automatically.
 - Localised through Fluent; settings persisted through `cosmic-config`.
 
@@ -76,6 +78,7 @@ store/
   index    SQLite range-query cache in front of them. Rebuildable.
   watcher  Debounced inotify, so external edits land in the UI.
 ui/        Month grid, time grid, sidebar, event editor.
+reminders/ Trigger scheduling (pure, tested) and notification delivery.
 app.rs     State, messages, update loop.
 ```
 
@@ -99,13 +102,32 @@ libcosmic already opts applications in: `Settings::transparent` defaults to `tru
 The application's job is simply not to paint over it. Every custom surface here reads
 `cosmic::Theme::transparent` — which the runtime sets from the compositor's blur state — and picks
 the matching container from the theme, so the app tracks the desktop's blur setting rather than
-hard-coding an opaque background.
+hard-coding an opaque background. Day cells in the month grid are deliberately unfilled for the same
+reason: 42 opaque rectangles would hide the very effect the window is asking for.
+
+Whether it actually appears is the desktop's call, from `frosted_windows` in the active
+`com.system76.CosmicTheme.*` config. `RUST_LOG=cosmic_calendar=debug` logs the resolved blur state at
+startup, which is the quickest way to tell "the app is painting over the blur" apart from "the
+desktop has blur switched off".
+
+## Reminders
+
+Each event's own `VALARM` triggers are honoured — parsed on read, written back on save, so alarms set
+in another client survive a round-trip. Settings offers a default lead time for events that carry no
+alarm of their own; it is off by default, because an app that starts notifying about everything
+without being asked is one people uninstall.
+
+Delivery goes through `org.freedesktop.Notifications`, which `cosmic-notifications` implements, so
+reminders land in COSMIC's own notification centre with no COSMIC-specific code.
+
+Two deliberate details: a reminder fires at most once per occurrence (two instances of a weekly
+series are distinct reminders, but re-reading the same file is not), and a trigger more than five
+minutes stale is dropped — otherwise opening the app in the evening would replay the whole day.
 
 ## Known limitations
 
-- The week and day grids place events in the row of the hour they start in, rather than drawing them
-  at a height proportional to duration with overlapping events side by side. Each chip states its
-  own end time so nothing is misleading, but a proper time-grid layout widget is still to come.
+- Reminders only fire while the app is running. A background service or an autostart entry would be
+  needed for alarms to reach you with the window closed.
 - No CalDAV sync built in — use `vdirsyncer` against the same directory.
 - Editing a single occurrence of a recurring series is not yet supported; edits apply to the whole
   series. `EXDATE` is read and written, so exclusions made by other tools survive a round-trip.

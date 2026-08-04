@@ -164,6 +164,7 @@ mod tests {
             end,
             rrule: rrule.map(ToOwned::to_owned),
             exdates: Vec::new(),
+            alarms: Vec::new(),
             sequence: 0,
             created: None,
             last_modified: None,

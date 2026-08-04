@@ -42,6 +42,9 @@ pub struct Config {
     pub show_week_numbers: bool,
     /// 24-hour clock rather than am/pm.
     pub time_24h: bool,
+    /// Minutes before an event to remind, for events that carry no `VALARM` of
+    /// their own. `0` means no default reminder.
+    pub default_reminder_minutes: u32,
 }
 
 impl Default for Config {
@@ -54,6 +57,9 @@ impl Default for Config {
             // The majority of locales this app is likely to meet use a 24-hour
             // clock; the setting is one toggle away for the rest.
             time_24h: true,
+            // Off by default: an app that starts notifying about every event
+            // without being asked is an app people uninstall.
+            default_reminder_minutes: 0,
         }
     }
 }
@@ -99,6 +105,13 @@ impl Config {
         } else {
             self.hidden_calendars.push(calendar_id.to_owned());
         }
+    }
+
+    /// The default reminder lead time, or `None` when disabled.
+    #[must_use]
+    pub fn default_reminder(&self) -> Option<chrono::Duration> {
+        (self.default_reminder_minutes > 0)
+            .then(|| chrono::Duration::minutes(i64::from(self.default_reminder_minutes)))
     }
 
     #[must_use]

@@ -40,6 +40,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 serde = { version = "1.0.229", features = ["derive"] }
+notify-rust = { version = "4.18", default-features = false, features = ["z"] }
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"

@@ -13,6 +13,7 @@ pub mod app;
 pub mod config;
 pub mod i18n;
 pub mod model;
+pub mod reminders;
 pub mod store;
 pub mod ui;
 

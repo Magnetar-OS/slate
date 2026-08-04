@@ -18,7 +18,13 @@ use cosmic::iced::Color;
 pub const MONTH_ROWS: i64 = 6;
 
 /// Height of one hour in the week and day grids.
-pub const HOUR_HEIGHT: f32 = 44.0;
+pub const HOUR_HEIGHT: f32 = 52.0;
+
+/// Floor on a block's drawn height, so a 10-minute event stays readable.
+pub const MIN_BLOCK_HEIGHT: f32 = 18.0;
+
+/// Diameter of the accent badge drawn behind today's date.
+pub const TODAY_BADGE: f32 = 26.0;
 
 /// Most events a month cell shows before collapsing into "+N more".
 pub const MAX_CHIPS_PER_DAY: usize = 3;
@@ -53,8 +59,8 @@ pub fn window_surface() -> cosmic::theme::Container<'static> {
     cosmic::theme::Container::WindowBackground
 }
 
-/// A raised surface (grid cells, the sidebar) that stays translucent when the
-/// theme is frosted.
+/// A raised surface (the sidebar, the all-day band) that stays translucent when
+/// the theme is frosted.
 #[must_use]
 pub fn panel_surface() -> cosmic::theme::Container<'static> {
     cosmic::theme::Container::custom(|theme| {
@@ -74,53 +80,151 @@ pub fn panel_surface() -> cosmic::theme::Container<'static> {
     })
 }
 
-/// A single day cell. `today` and `outside` (a day from an adjacent month) get
-/// distinct treatments.
+/// A day cell in the month grid.
+///
+/// Deliberately unfilled. Painting every cell produces a heavy checkerboard and,
+/// worse, hides the compositor's blur behind 42 opaque rectangles. A hairline
+/// border carries the grid instead, and today is marked on the date badge rather
+/// than by flooding the whole cell.
 #[must_use]
 pub fn day_cell(today: bool, outside: bool) -> cosmic::theme::Container<'static> {
     cosmic::theme::Container::custom(move |theme| {
         let cosmic = theme.cosmic();
-        let container = cosmic.primary(theme.transparent);
+        let on = cosmic.primary(theme.transparent).on;
 
-        let mut background: Color = container.base.into();
-        if outside {
-            // Recede rather than repaint: dropping alpha keeps whatever the
-            // compositor blurred behind us visible.
-            background.a *= 0.45;
-        }
+        let mut line: Color = on.into();
+        line.a = if outside { 0.04 } else { 0.09 };
 
-        let border = if today {
-            cosmic::iced::Border {
-                radius: cosmic.corner_radii.radius_s.into(),
-                width: 1.5,
-                color: cosmic.accent_color().into(),
-            }
+        let background = if today {
+            // A whisper of accent, just enough to find today at a glance.
+            let mut tint: Color = cosmic.accent_color().into();
+            tint.a = 0.07;
+            Some(cosmic::iced::Background::Color(tint))
         } else {
-            cosmic::iced::Border {
-                radius: cosmic.corner_radii.radius_s.into(),
-                ..Default::default()
-            }
+            None
         };
 
+        let mut text: Color = on.into();
+        if outside {
+            text.a = 0.45;
+        }
+
         cosmic::iced::widget::container::Style {
-            icon_color: Some(Color::from(container.on)),
-            text_color: Some(Color::from(container.on)),
-            background: Some(cosmic::iced::Background::Color(background)),
-            border,
+            icon_color: Some(text),
+            text_color: Some(text),
+            background,
+            border: cosmic::iced::Border {
+                radius: cosmic.corner_radii.radius_xs.into(),
+                width: 1.0,
+                color: line,
+            },
             shadow: cosmic::iced::Shadow::default(),
             snap: true,
         }
     })
 }
 
-/// An event chip tinted with its calendar's colour.
+/// The filled accent circle behind today's date number.
+#[must_use]
+pub fn today_badge() -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(|theme| {
+        let cosmic = theme.cosmic();
+        cosmic::iced::widget::container::Style {
+            icon_color: Some(Color::from(cosmic.on_accent_color())),
+            text_color: Some(Color::from(cosmic.on_accent_color())),
+            background: Some(cosmic::iced::Background::Color(
+                cosmic.accent_color().into(),
+            )),
+            border: cosmic::iced::Border {
+                // Radius far larger than the box gives a circle.
+                radius: (TODAY_BADGE / 2.0).into(),
+                ..Default::default()
+            },
+            shadow: cosmic::iced::Shadow::default(),
+            snap: false,
+        }
+    })
+}
+
+/// A solid bar of the calendar's colour, used as an event's leading accent.
+#[must_use]
+pub fn color_bar(rgb: Rgb) -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(move |theme| {
+        let cosmic = theme.cosmic();
+        cosmic::iced::widget::container::Style {
+            background: Some(cosmic::iced::Background::Color(color(rgb))),
+            border: cosmic::iced::Border {
+                radius: cosmic.corner_radii.radius_xs.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
+}
+
+/// One of the hairlines ruling the hour grid.
+#[must_use]
+pub fn hour_rule(emphasis: bool) -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(move |theme| {
+        let cosmic = theme.cosmic();
+        let mut line: Color = cosmic.primary(theme.transparent).on.into();
+        line.a = if emphasis { 0.12 } else { 0.06 };
+
+        cosmic::iced::widget::container::Style {
+            background: Some(cosmic::iced::Background::Color(line)),
+            ..Default::default()
+        }
+    })
+}
+
+/// The "now" marker drawn across today's column.
+#[must_use]
+pub fn now_marker() -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(|theme| {
+        let cosmic = theme.cosmic();
+        cosmic::iced::widget::container::Style {
+            background: Some(cosmic::iced::Background::Color(
+                cosmic.destructive_color().into(),
+            )),
+            border: cosmic::iced::Border {
+                radius: 1.5.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
+}
+
+/// The dot that caps the "now" line.
+#[must_use]
+pub fn now_dot() -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(|theme| {
+        let cosmic = theme.cosmic();
+        cosmic::iced::widget::container::Style {
+            background: Some(cosmic::iced::Background::Color(
+                cosmic.destructive_color().into(),
+            )),
+            border: cosmic::iced::Border {
+                radius: 4.0.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
+}
+
+/// An event, tinted with its calendar's colour.
+///
+/// The tint is kept low-alpha so the compositor's blur still reads through it;
+/// the solid colour lives in the leading bar instead, which is what makes the
+/// calendar identifiable at a glance without turning the grid into blocks of paint.
 #[must_use]
 pub fn event_chip(rgb: Rgb) -> cosmic::theme::Button {
     cosmic::theme::Button::Custom {
-        active: Box::new(move |_focused, theme| chip_style(rgb, theme, 0.22)),
-        disabled: Box::new(move |theme| chip_style(rgb, theme, 0.12)),
-        hovered: Box::new(move |_focused, theme| chip_style(rgb, theme, 0.34)),
-        pressed: Box::new(move |_focused, theme| chip_style(rgb, theme, 0.44)),
+        active: Box::new(move |_focused, theme| chip_style(rgb, theme, 0.20)),
+        disabled: Box::new(move |theme| chip_style(rgb, theme, 0.10)),
+        hovered: Box::new(move |_focused, theme| chip_style(rgb, theme, 0.32)),
+        pressed: Box::new(move |_focused, theme| chip_style(rgb, theme, 0.42)),
     }
 }
 
@@ -135,6 +239,18 @@ fn chip_style(rgb: Rgb, theme: &cosmic::Theme, alpha: f32) -> cosmic::widget::bu
         text_color: Some(Color::from(cosmic.primary(theme.transparent).on)),
         outline_width: 0.0,
         outline_color: Color::TRANSPARENT,
+        ..Default::default()
+    }
+}
+
+/// Secondary text — column headers, times, hints. Dimmed rather than recoloured,
+/// so it stays legible against whatever the theme and the blur put behind it.
+#[must_use]
+pub fn dim_text(theme: &cosmic::Theme) -> cosmic::iced::widget::text::Style {
+    let mut color: Color = theme.cosmic().primary(theme.transparent).on.into();
+    color.a = 0.6;
+    cosmic::iced::widget::text::Style {
+        color: Some(color),
         ..Default::default()
     }
 }

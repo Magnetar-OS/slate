@@ -96,3 +96,13 @@ error-save-event = Could not save the event.
 error-delete-event = Could not delete the event.
 error-invalid-time-range = The end time must be after the start time.
 error-summary-required = Give the event a title.
+
+## Reminders
+default-reminder = Default reminder
+default-reminder-description = Used for events that carry no reminder of their own.
+reminder-none = None
+reminder-minutes = { $minutes } minutes before
+reminder-hours = { $hours } hours before
+reminder-day-before = 1 day before
+reminder-now = Starting now
+reminder-in = In { $minutes } minutes

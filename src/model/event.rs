@@ -233,6 +233,9 @@ pub struct Event {
     pub rrule: Option<String>,
     /// `EXDATE` values — occurrences deleted from a series.
     pub exdates: Vec<NaiveDateTime>,
+    /// `VALARM` triggers, as offsets from the event's start. Negative means
+    /// "before", which is what almost every real alarm is.
+    pub alarms: Vec<chrono::Duration>,
     pub sequence: i32,
     pub created: Option<DateTime<Utc>>,
     pub last_modified: Option<DateTime<Utc>>,
@@ -256,6 +259,7 @@ impl Event {
             end: EventTime::Zoned(start + chrono::Duration::hours(1), local),
             rrule: None,
             exdates: Vec::new(),
+            alarms: Vec::new(),
             sequence: 0,
             created: Some(Utc::now()),
             last_modified: Some(Utc::now()),

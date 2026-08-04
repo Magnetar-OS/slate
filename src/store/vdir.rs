@@ -190,6 +190,7 @@ fn convert_event(ev: &icalendar::Event, calendar_id: &str, file_name: &str) -> O
         end,
         rrule: ev.property_value("RRULE").map(ToOwned::to_owned),
         exdates: parse_exdates(ev),
+        alarms: parse_alarms(ev),
         sequence: ev.get_sequence().unwrap_or(0) as i32,
         created: ev.get_created(),
         last_modified: ev.get_last_modified(),
@@ -227,6 +228,135 @@ fn parse_exdates(ev: &icalendar::Event) -> Vec<NaiveDateTime> {
             if let Some(dt) = parse_ical_datetime(value.trim()) {
                 out.push(dt);
             }
+        }
+    }
+    out
+}
+
+/// Reads `VALARM` triggers as offsets from the event's start.
+///
+/// Only duration triggers are understood, which is what alarms overwhelmingly
+/// are. An absolute `TRIGGER;VALUE=DATE-TIME` or one anchored to the event's end
+/// is skipped rather than guessed at — a reminder that fires at the wrong time is
+/// worse than one that does not fire.
+fn parse_alarms(ev: &icalendar::Event) -> Vec<chrono::Duration> {
+    let mut out = Vec::new();
+
+    for component in ev.components() {
+        if !component.component_kind().eq_ignore_ascii_case("VALARM") {
+            continue;
+        }
+
+        let Some(property) = component.properties().get("TRIGGER") else {
+            continue;
+        };
+
+        // RELATED=END would need the event's duration to resolve; skip it.
+        let related_to_end = property
+            .params()
+            .get("RELATED")
+            .is_some_and(|p| format!("{p:?}").to_ascii_uppercase().contains("END"));
+        if related_to_end {
+            continue;
+        }
+
+        if let Some(duration) = parse_iso_duration(property.value()) {
+            out.push(duration);
+        }
+    }
+
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Parses an RFC 5545 duration such as `-PT15M`, `PT1H30M`, `-P1D`, `P1W`.
+#[must_use]
+pub fn parse_iso_duration(value: &str) -> Option<chrono::Duration> {
+    let raw = value.trim();
+    let (negative, rest) = match raw.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, raw.strip_prefix('+').unwrap_or(raw)),
+    };
+
+    let rest = rest.strip_prefix('P').or_else(|| rest.strip_prefix('p'))?;
+
+    let (date_part, time_part) = match rest.find(['T', 't']) {
+        Some(i) => (&rest[..i], &rest[i + 1..]),
+        None => (rest, ""),
+    };
+
+    let mut seconds: i64 = 0;
+    let mut digits = String::new();
+
+    for c in date_part.chars() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            continue;
+        }
+        let n: i64 = digits.parse().ok()?;
+        digits.clear();
+        seconds += match c.to_ascii_uppercase() {
+            'W' => n * 7 * 86_400,
+            'D' => n * 86_400,
+            _ => return None,
+        };
+    }
+    if !digits.is_empty() {
+        return None;
+    }
+
+    for c in time_part.chars() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+            continue;
+        }
+        let n: i64 = digits.parse().ok()?;
+        digits.clear();
+        seconds += match c.to_ascii_uppercase() {
+            'H' => n * 3_600,
+            'M' => n * 60,
+            'S' => n,
+            _ => return None,
+        };
+    }
+    if !digits.is_empty() {
+        return None;
+    }
+
+    Some(chrono::Duration::seconds(if negative {
+        -seconds
+    } else {
+        seconds
+    }))
+}
+
+/// Renders a duration back to the RFC 5545 form.
+#[must_use]
+pub fn format_iso_duration(duration: chrono::Duration) -> String {
+    let total = duration.num_seconds();
+    let sign = if total < 0 { "-" } else { "" };
+    let abs = total.abs();
+
+    let (days, rest) = (abs / 86_400, abs % 86_400);
+    let (hours, rest) = (rest / 3_600, rest % 3_600);
+    let (minutes, seconds) = (rest / 60, rest % 60);
+
+    let mut out = format!("{sign}P");
+    if days > 0 {
+        out.push_str(&format!("{days}D"));
+    }
+    if hours > 0 || minutes > 0 || seconds > 0 || days == 0 {
+        out.push('T');
+        if hours > 0 {
+            out.push_str(&format!("{hours}H"));
+        }
+        if minutes > 0 {
+            out.push_str(&format!("{minutes}M"));
+        }
+        // A bare "PT" is invalid, so a zero-length trigger still needs a unit.
+        if seconds > 0 || (hours == 0 && minutes == 0) {
+            out.push_str(&format!("{seconds}S"));
         }
     }
     out
@@ -300,6 +430,15 @@ pub fn to_ics(event: &Event) -> String {
 
     for exdate in &event.exdates {
         ical.add_multi_property("EXDATE", &format_ical_datetime(*exdate, event.start));
+    }
+
+    for alarm in &event.alarms {
+        // A DISPLAY alarm is what every client understands; the description
+        // doubles as the notification body if another app fires it.
+        ical.append_component(icalendar::Alarm::display(
+            &event.summary,
+            icalendar::Trigger::Duration(*alarm, Some(icalendar::Related::Start)),
+        ));
     }
 
     let mut calendar = Calendar::new();
@@ -552,6 +691,91 @@ mod tests {
         write_event(&cal, &event).unwrap();
         let got = read_collection(&cal).remove(0);
         assert_eq!(got.exdates, event.exdates);
+    }
+
+    #[test]
+    fn parses_the_iso_durations_alarms_use() {
+        use chrono::Duration;
+        assert_eq!(parse_iso_duration("-PT15M"), Some(Duration::minutes(-15)));
+        assert_eq!(parse_iso_duration("-PT1H"), Some(Duration::hours(-1)));
+        assert_eq!(parse_iso_duration("PT30M"), Some(Duration::minutes(30)));
+        assert_eq!(parse_iso_duration("-P1D"), Some(Duration::days(-1)));
+        assert_eq!(parse_iso_duration("-P1W"), Some(Duration::weeks(-1)));
+        assert_eq!(parse_iso_duration("-PT1H30M"), Some(Duration::minutes(-90)));
+        assert_eq!(parse_iso_duration("PT0S"), Some(Duration::zero()));
+    }
+
+    #[test]
+    fn rejects_durations_it_cannot_represent() {
+        assert_eq!(parse_iso_duration(""), None);
+        assert_eq!(parse_iso_duration("15M"), None, "missing the P prefix");
+        assert_eq!(parse_iso_duration("-PT15"), None, "missing the unit");
+        assert_eq!(parse_iso_duration("nonsense"), None);
+    }
+
+    #[test]
+    fn iso_durations_roundtrip() {
+        use chrono::Duration;
+        for d in [
+            Duration::minutes(-15),
+            Duration::hours(-1),
+            Duration::days(-1),
+            Duration::minutes(-90),
+            Duration::zero(),
+        ] {
+            let text = format_iso_duration(d);
+            assert_eq!(
+                parse_iso_duration(&text),
+                Some(d),
+                "roundtrip failed for {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn reads_an_alarm_from_a_file() {
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\n\
+                   BEGIN:VEVENT\r\nUID:a@test\r\nDTSTART:20260804T090000Z\r\n\
+                   DTEND:20260804T100000Z\r\nSUMMARY:Standup\r\n\
+                   BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:Standup\r\n\
+                   TRIGGER:-PT10M\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+        let events = parse_ics(ics, "personal", "a.ics");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].alarms, vec![chrono::Duration::minutes(-10)]);
+    }
+
+    #[test]
+    fn alarms_survive_a_roundtrip_through_disk() {
+        let root = temp_root();
+        let cal = create_collection(root.path(), "Personal", Rgb(1, 2, 3)).unwrap();
+
+        let mut event = Event::draft(
+            &cal.id,
+            NaiveDate::from_ymd_opt(2026, 8, 4)
+                .unwrap()
+                .and_hms_opt(9, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        );
+        event.summary = "Standup".into();
+        event.alarms = vec![
+            chrono::Duration::minutes(-60),
+            chrono::Duration::minutes(-10),
+        ];
+
+        write_event(&cal, &event).unwrap();
+        let got = read_collection(&cal).remove(0);
+
+        assert_eq!(got.alarms, event.alarms, "alarms were lost on save");
+    }
+
+    #[test]
+    fn an_event_without_alarms_gets_none() {
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\n\
+                   BEGIN:VEVENT\r\nUID:a@test\r\nDTSTART:20260804T090000Z\r\n\
+                   SUMMARY:Standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        assert!(parse_ics(ics, "personal", "a.ics")[0].alarms.is_empty());
     }
 
     #[test]

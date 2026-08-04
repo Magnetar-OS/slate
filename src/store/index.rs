@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Bumped whenever the schema changes; a mismatch wipes and rebuilds the cache.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS events (
@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS events (
     end_tz      TEXT,
     rrule       TEXT,
     exdates     TEXT    NOT NULL,
+    alarms      TEXT    NOT NULL DEFAULT '',
     sequence    INTEGER NOT NULL,
     created     INTEGER,
     modified    INTEGER,
@@ -60,11 +61,47 @@ CREATE TABLE IF NOT EXISTS files (
     PRIMARY KEY (calendar_id, file_name)
 );
 
+";
+
+/// Created before anything else, so the stored schema version can be read back
+/// even when the data tables are about to be dropped.
+const META_SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 ";
+
+/// Wipes the cached data so it can be recreated at the current schema.
+const DROP_DATA: &str = r"
+DROP TABLE IF EXISTS events;
+DROP TABLE IF EXISTS files;
+";
+
+/// Columns every query depends on. Checked against the live table at open time.
+const EXPECTED_COLUMNS: &[&str] = &[
+    "calendar_id",
+    "file_name",
+    "uid",
+    "summary",
+    "description",
+    "location",
+    "start_kind",
+    "start_naive",
+    "start_tz",
+    "end_kind",
+    "end_naive",
+    "end_tz",
+    "rrule",
+    "exdates",
+    "alarms",
+    "sequence",
+    "created",
+    "modified",
+    "start_utc",
+    "end_utc",
+    "until_utc",
+];
 
 const KIND_DATE: i64 = 0;
 const KIND_FLOATING: i64 = 1;
@@ -98,7 +135,10 @@ impl Index {
         // NORMAL sync is right for a cache we can always rebuild.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.execute_batch(SCHEMA)?;
+
+        // The version has to be readable before the data tables are touched, so
+        // `meta` is created on its own first.
+        conn.execute_batch(META_SCHEMA)?;
 
         let mut index = Self { conn, local };
 
@@ -106,12 +146,29 @@ impl Index {
             index.meta("schema_version")?.and_then(|v| v.parse().ok());
         let stored_tz = index.meta("timezone")?;
 
-        let stale =
-            stored_version != Some(SCHEMA_VERSION) || stored_tz.as_deref() != Some(local.name());
+        // The recorded version is not trusted on its own. This is a cache, and a
+        // half-applied upgrade — the version stamped but the table not rebuilt —
+        // would otherwise fail on every query with no way to recover. Checking the
+        // real columns costs one pragma and makes the cache self-healing.
+        let stale = stored_version != Some(SCHEMA_VERSION)
+            || stored_tz.as_deref() != Some(local.name())
+            || !index.has_expected_columns()?;
 
         if stale {
-            tracing::info!("index is stale (schema or timezone changed); rebuilding");
-            index.clear()?;
+            tracing::info!(
+                from = ?stored_version,
+                to = SCHEMA_VERSION,
+                "index is stale (schema or timezone changed); rebuilding"
+            );
+            // Drop rather than DELETE. This is a cache, so there is nothing to
+            // migrate — and a plain `CREATE TABLE IF NOT EXISTS` over an older
+            // database would silently keep the old columns and fail on first write.
+            index.conn.execute_batch(DROP_DATA)?;
+        }
+
+        index.conn.execute_batch(SCHEMA)?;
+
+        if stale {
             index.set_meta("schema_version", &SCHEMA_VERSION.to_string())?;
             index.set_meta("timezone", local.name())?;
         }
@@ -123,11 +180,29 @@ impl Index {
     #[cfg(test)]
     pub fn in_memory(local: Tz) -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
+        conn.execute_batch(META_SCHEMA)?;
         conn.execute_batch(SCHEMA)?;
         let mut index = Self { conn, local };
         index.set_meta("schema_version", &SCHEMA_VERSION.to_string())?;
         index.set_meta("timezone", local.name())?;
         Ok(index)
+    }
+
+    /// Whether the `events` table on disk actually has the columns this build
+    /// writes. A missing table counts as stale, which is what we want on a first run.
+    fn has_expected_columns(&self) -> Result<bool, StoreError> {
+        let mut stmt = self.conn.prepare("PRAGMA table_info(events)")?;
+        let found: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<_, _>>()?;
+
+        if found.is_empty() {
+            return Ok(false);
+        }
+
+        Ok(EXPECTED_COLUMNS
+            .iter()
+            .all(|column| found.iter().any(|f| f == column)))
     }
 
     fn meta(&self, key: &str) -> Result<Option<String>, StoreError> {
@@ -143,12 +218,6 @@ impl Index {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
         )?;
-        Ok(())
-    }
-
-    fn clear(&mut self) -> Result<(), StoreError> {
-        self.conn
-            .execute_batch("DELETE FROM events; DELETE FROM files;")?;
         Ok(())
     }
 
@@ -322,7 +391,7 @@ impl Index {
 
 const COLUMNS: &str = "calendar_id, file_name, uid, summary, description, location, \
      start_kind, start_naive, start_tz, end_kind, end_naive, end_tz, \
-     rrule, exdates, sequence, created, modified";
+     rrule, exdates, sequence, created, modified, alarms";
 
 fn insert_event(
     tx: &rusqlite::Transaction<'_>,
@@ -339,15 +408,22 @@ fn insert_event(
         .collect::<Vec<_>>()
         .join(",");
 
+    let alarms = event
+        .alarms
+        .iter()
+        .map(|d| d.num_seconds().to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
     tx.execute(
         "INSERT INTO events (
             calendar_id, file_name, uid, summary, description, location,
             start_kind, start_naive, start_tz, end_kind, end_naive, end_tz,
             rrule, exdates, sequence, created, modified,
-            start_utc, end_utc, until_utc
+            start_utc, end_utc, until_utc, alarms
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-            ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+            ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21
          )
          ON CONFLICT(calendar_id, file_name, uid) DO UPDATE SET
             summary = excluded.summary, description = excluded.description,
@@ -357,6 +433,7 @@ fn insert_event(
             end_kind = excluded.end_kind, end_naive = excluded.end_naive,
             end_tz = excluded.end_tz,
             rrule = excluded.rrule, exdates = excluded.exdates,
+            alarms = excluded.alarms,
             sequence = excluded.sequence, created = excluded.created,
             modified = excluded.modified,
             start_utc = excluded.start_utc, end_utc = excluded.end_utc,
@@ -382,6 +459,7 @@ fn insert_event(
             event.start.to_utc(local).timestamp(),
             event.end.to_utc(local).timestamp(),
             series_until(event, local).map(|d| d.timestamp()),
+            alarms,
         ],
     )?;
     Ok(())
@@ -464,6 +542,13 @@ fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
             .filter_map(|s| s.parse::<i64>().ok())
             .filter_map(|secs| DateTime::from_timestamp(secs, 0))
             .map(|d| d.naive_utc())
+            .collect(),
+        alarms: row
+            .get::<_, String>(17)?
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse::<i64>().ok())
+            .map(chrono::Duration::seconds)
             .collect(),
         sequence: row.get(14)?,
         created: row
@@ -652,6 +737,127 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn an_older_on_disk_schema_is_rebuilt_not_patched() {
+        // The in-memory tests always start from the current schema, so they cannot
+        // catch this: `CREATE TABLE IF NOT EXISTS` over a v1 database would leave
+        // the old columns in place and fail on the first insert.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE events (calendar_id TEXT, file_name TEXT, uid TEXT);
+                 CREATE TABLE files (calendar_id TEXT, file_name TEXT);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '1'), ('timezone', 'UTC')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut index = Index::open(&path, chrono_tz::UTC).expect("stale index should rebuild");
+
+        // Writing must now succeed against the current columns.
+        let root = tempfile::tempdir().unwrap();
+        let cal = vdir::create_collection(root.path(), "Personal", Rgb(1, 2, 3)).unwrap();
+        write(&cal, "Standup", 4, None);
+        index.sync_calendar(&cal).unwrap();
+        assert_eq!(index.event_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn a_half_applied_upgrade_heals_itself() {
+        // The version says "current" but the table is from an older build — the
+        // state a partially-successful upgrade leaves behind. Trusting the version
+        // alone would make every query fail with no way back.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite");
+
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 CREATE TABLE events (calendar_id TEXT, file_name TEXT, uid TEXT);
+                 CREATE TABLE files (calendar_id TEXT, file_name TEXT);",
+            )
+            .unwrap();
+            conn.execute(
+                &format!(
+                    "INSERT INTO meta (key, value) VALUES ('schema_version', '{SCHEMA_VERSION}'), ('timezone', 'UTC')"
+                ),
+                [],
+            )
+            .unwrap();
+        }
+
+        let mut index = Index::open(&path, chrono_tz::UTC).expect("should rebuild");
+
+        let root = tempfile::tempdir().unwrap();
+        let cal = vdir::create_collection(root.path(), "Personal", Rgb(1, 2, 3)).unwrap();
+        write(&cal, "Standup", 4, None);
+        index.sync_calendar(&cal).unwrap();
+
+        // And a query over the rebuilt table must work.
+        assert_eq!(
+            index
+                .candidates(
+                    std::slice::from_ref(&cal.id),
+                    utc(2026, 8, 1),
+                    utc(2026, 9, 1)
+                )
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_current_index_is_kept_across_reopens() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite");
+        let root = tempfile::tempdir().unwrap();
+        let cal = vdir::create_collection(root.path(), "Personal", Rgb(1, 2, 3)).unwrap();
+        write(&cal, "Standup", 4, None);
+
+        {
+            let mut index = Index::open(&path, chrono_tz::UTC).unwrap();
+            index.sync_calendar(&cal).unwrap();
+            assert_eq!(index.event_count().unwrap(), 1);
+        }
+
+        // Same schema and timezone: the cache should survive rather than rebuild.
+        let index = Index::open(&path, chrono_tz::UTC).unwrap();
+        assert_eq!(
+            index.event_count().unwrap(),
+            1,
+            "an up-to-date index was needlessly wiped"
+        );
+    }
+
+    #[test]
+    fn changing_timezone_invalidates_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite");
+        let root = tempfile::tempdir().unwrap();
+        let cal = vdir::create_collection(root.path(), "Personal", Rgb(1, 2, 3)).unwrap();
+        write(&cal, "Standup", 4, None);
+
+        {
+            let mut index = Index::open(&path, chrono_tz::UTC).unwrap();
+            index.sync_calendar(&cal).unwrap();
+        }
+
+        // Floating and all-day times are resolved against the local zone, so the
+        // cached UTC bounds are wrong once it changes.
+        let index = Index::open(&path, chrono_tz::Europe::Athens).unwrap();
+        assert_eq!(index.event_count().unwrap(), 0);
     }
 
     #[test]

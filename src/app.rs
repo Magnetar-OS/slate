@@ -20,6 +20,22 @@ use std::collections::{BTreeMap, HashMap};
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 /// Hour the week/day grid scrolls to when the day holds no timed events.
 const DEFAULT_SCROLL_HOUR: u32 = 8;
+
+/// Lead times offered for the default reminder. `0` disables it.
+const REMINDER_CHOICES: &[u32] = &[0, 5, 10, 15, 30, 60, 120, 1440];
+
+thread_local! {
+    /// Built once per thread: the labels are localised, so they cannot be a const.
+    static REMINDER_LABELS: Vec<String> = REMINDER_CHOICES
+        .iter()
+        .map(|minutes| match minutes {
+            0 => fl!("reminder-none"),
+            1440 => fl!("reminder-day-before"),
+            m if *m < 60 => fl!("reminder-minutes", minutes = m.to_string()),
+            m => fl!("reminder-hours", hours = (m / 60).to_string()),
+        })
+        .collect();
+}
 const APP_ICON: &[u8] = include_bytes!("../resources/icons/hicolor/scalable/apps/icon.svg");
 
 pub struct AppModel {
@@ -39,6 +55,8 @@ pub struct AppModel {
     /// The date the current view is centred on.
     anchor: NaiveDate,
     today: NaiveDate,
+    /// Local wall-clock time, refreshed each minute to drive the "now" marker.
+    now: NaiveDateTime,
     /// Occurrences for the visible range, grouped by day.
     days: BTreeMap<NaiveDate, Vec<Occurrence>>,
 
@@ -49,6 +67,7 @@ pub struct AppModel {
     new_calendar_name: Option<String>,
 
     toasts: widget::Toasts<Message>,
+    reminders: crate::reminders::Scheduler,
 }
 
 #[derive(Debug, Clone)]
@@ -107,9 +126,13 @@ pub enum Message {
     SetFirstDayOfWeek(usize),
     ToggleWeekNumbers(bool),
     Toggle24Hour(bool),
+    SetDefaultReminder(usize),
 
     /// Deferred one frame so the grid's scrollable exists before we scroll it.
     ScrollTimeGrid,
+
+    /// Minute tick, moving the "now" marker.
+    Tick,
 
     /// Something on disk changed under us.
     FilesChanged,
@@ -223,13 +246,31 @@ impl cosmic::Application for AppModel {
             fatal,
             anchor: today,
             today,
+            now: chrono::Local::now().naive_local(),
             days: BTreeMap::new(),
             views,
             mini: widget::calendar::CalendarModel::now(),
             editor: None,
             new_calendar_name: None,
             toasts: widget::Toasts::new(Message::CloseToast),
+            reminders: crate::reminders::Scheduler::new(),
         };
+
+        {
+            // One-shot diagnostic: whether the compositor/theme want us frosted,
+            // and whether the runtime is opted in.
+            let theme = cosmic::theme::active();
+            let cosmic_theme = theme.cosmic();
+            tracing::debug!(
+                frosted_windows = cosmic_theme.frosted_windows,
+                frosted_maximized = cosmic_theme.frosted_maximized_apps,
+                auto_blur = ?app.core.auto_blur(),
+                app_type = ?app.core.app_type(),
+                core_frosted = app.core.frosted(cosmic_theme),
+                theme_transparent = theme.transparent,
+                "blur state at startup"
+            );
+        }
 
         app.reload();
         let command = Task::batch([app.update_title(), Self::request_scroll()]);
@@ -389,6 +430,8 @@ impl cosmic::Application for AppModel {
                     Message::UpdateConfig(update.config)
                 }),
             file_watch_subscription(),
+            // Moves the "now" marker and rolls the highlight over at midnight.
+            cosmic::iced::time::every(std::time::Duration::from_secs(30)).map(|_| Message::Tick),
         ])
     }
 
@@ -641,7 +684,26 @@ impl cosmic::Application for AppModel {
                 self.persist_config();
             }
 
+            Message::SetDefaultReminder(index) => {
+                if let Some(minutes) = REMINDER_CHOICES.get(index).copied() {
+                    self.config.default_reminder_minutes = minutes;
+                    self.persist_config();
+                }
+            }
+
             Message::ScrollTimeGrid => return self.scroll_time_grid(),
+
+            Message::Tick => {
+                self.now = chrono::Local::now().naive_local();
+                let today = self.now.date();
+                if today != self.today {
+                    // Past midnight: today moved, so the highlight and any
+                    // relative view must follow it.
+                    self.today = today;
+                    self.reload();
+                }
+                self.fire_due_reminders();
+            }
 
             Message::FilesChanged => {
                 if let Some(store) = self.store.as_mut() {
@@ -737,6 +799,7 @@ impl AppModel {
                 start,
                 days: 7,
                 today: self.today,
+                now: self.now,
                 occurrences: &self.days,
                 calendars,
                 config: &self.config,
@@ -746,6 +809,7 @@ impl AppModel {
                 start,
                 days: 1,
                 today: self.today,
+                now: self.now,
                 occurrences: &self.days,
                 calendars,
                 config: &self.config,
@@ -794,6 +858,77 @@ impl AppModel {
         )
     }
 
+    /// Shows any reminder whose trigger has just passed.
+    ///
+    /// Reminders are checked against the store rather than the currently visible
+    /// range, so they still fire while you are looking at a different month.
+    fn fire_due_reminders(&mut self) {
+        let Some(store) = self.store.as_ref() else {
+            return;
+        };
+
+        let today = self.now.date();
+        let occurrences =
+            match store.occurrences(today, today + Duration::days(2), &self.config.hidden_set()) {
+                Ok(occurrences) => occurrences,
+                Err(why) => {
+                    tracing::warn!(%why, "could not load occurrences to check reminders");
+                    return;
+                }
+            };
+
+        // Map an occurrence back to its event's alarms. The index lookup is by
+        // UID, so every instance of a series inherits the series' alarms.
+        let alarms_for = |occurrence: &Occurrence| {
+            store
+                .event(&occurrence.calendar_id, &occurrence.uid)
+                .ok()
+                .flatten()
+                .map(|event| event.alarms)
+                .unwrap_or_default()
+        };
+
+        let due = self.reminders.due(
+            &occurrences,
+            alarms_for,
+            self.now,
+            self.config.default_reminder(),
+        );
+
+        if !due.is_empty() {
+            tracing::info!(count = due.len(), "firing reminders");
+        }
+
+        for reminder in &due {
+            crate::reminders::notify(
+                reminder,
+                <Self as cosmic::Application>::APP_ID,
+                self.reminder_body(reminder),
+            );
+        }
+
+        // Keep the fired set from growing for the lifetime of the process.
+        self.reminders.forget_before(self.now - Duration::days(1));
+    }
+
+    fn reminder_body(&self, reminder: &crate::reminders::Reminder) -> String {
+        let when = if reminder.all_day {
+            fl!("all-day")
+        } else {
+            let minutes = reminder.lead.num_minutes();
+            if minutes <= 0 {
+                fl!("reminder-now")
+            } else {
+                fl!("reminder-in", minutes = minutes.to_string())
+            }
+        };
+
+        match &reminder.location {
+            Some(location) if !location.is_empty() => format!("{when} · {location}"),
+            _ => when,
+        }
+    }
+
     fn editor_view(&self) -> Element<'_, Message> {
         match &self.editor {
             Some(editor) => editor.view(self.calendars(), &self.config),
@@ -835,6 +970,20 @@ impl AppModel {
             .add(
                 widget::settings::item::builder(fl!("time-format-24h"))
                     .toggler(self.config.time_24h, Message::Toggle24Hour),
+            )
+            .add(
+                widget::settings::item::builder(fl!("default-reminder"))
+                    .description(fl!("default-reminder-description"))
+                    .control(
+                        widget::dropdown(
+                            REMINDER_LABELS.with(Clone::clone),
+                            REMINDER_CHOICES
+                                .iter()
+                                .position(|m| *m == self.config.default_reminder_minutes),
+                            Message::SetDefaultReminder,
+                        )
+                        .width(Length::Fixed(160.0)),
+                    ),
             )
             .into()
     }

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Calendar
+GenericName=Calendar
+Comment=View and manage your events
+Categories=Office;Calendar;
+Exec=cosmic-calendar %u
+Icon=io.github.entro314labs.Calendar
+Terminal=false
+Type=Application
+StartupNotify=true
+StartupWMClass=io.github.entro314labs.Calendar
+MimeType=text/calendar;
+Keywords=calendar;event;schedule;appointment;agenda;

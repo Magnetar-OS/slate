@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.entro314labs.Calendar</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <name>Calendar</name>
+  <summary>View and manage your events</summary>
+
+  <description>
+    <p>
+      A calendar for the COSMIC desktop. Events are stored as standard
+      iCalendar files in a vdir layout, so they interoperate with vdirsyncer,
+      khal, and any CalDAV server you point them at.
+    </p>
+    <ul>
+      <li>Month, week, and day views</li>
+      <li>Multiple calendars with per-calendar colors and visibility</li>
+      <li>Recurring events</li>
+      <li>Picks up changes made by other tools on disk</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.entro314labs.Calendar.desktop</launchable>
+
+  <categories>
+    <category>Office</category>
+    <category>Calendar</category>
+  </categories>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-08-04">
+      <description>
+        <p>Initial release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

@@ -1,0 +1,70 @@
+[package]
+name = "cosmic-calendar"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "A calendar for the COSMIC desktop"
+repository = "https://github.com/entro314-labs/cosmic-calendar"
+rust-version = "1.97.1"
+
+[dependencies]
+# --- COSMIC / UI ---
+i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
+i18n-embed-fl = "0.10"
+rust-embed = "8.12"
+open = "5.4"
+tokio = { version = "1.53", features = ["full"] }
+
+# --- time ---
+# chrono is the domain time type: both `icalendar` and `rrule` are built on it.
+chrono = { version = "0.4.45", features = ["clock", "serde"] }
+chrono-tz = "0.10.4"
+# jiff appears only at the libcosmic boundary — `widget::calendar` speaks
+# `jiff::civil::Date`. Kept in lockstep with the version libcosmic resolves.
+jiff = "0.2.35"
+
+# --- iCalendar / recurrence ---
+icalendar = { version = "0.17.13", features = ["parser", "chrono-tz", "recurrence"] }
+rrule = "0.14"
+
+# --- storage ---
+# `bundled` compiles SQLite from source so we never depend on the host's
+# libsqlite3 version. Costs ~15s of build time, buys reproducibility.
+rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
+notify = "8.2"
+
+# --- misc ---
+uuid = { version = "1.24", features = ["v4"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "6"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic.git"
+# See https://github.com/pop-os/libcosmic/blob/master/Cargo.toml for available features.
+features = [
+    # About widget for the app
+    "about",
+    # On app startup, focuses an existing instance if the app is already open
+    "single-instance",
+    # GPU-accelerated rendering
+    "wgpu",
+    # xdg portal dialogs on Linux
+    "xdg-portal",
+]
+
+[dev-dependencies]
+tempfile = "3"
+
+# Uncomment to test against a locally-cloned libcosmic
+# [patch.'https://github.com/pop-os/libcosmic']
+# libcosmic = { path = "../libcosmic" }
+# cosmic-config = { path = "../libcosmic/cosmic-config" }
+# cosmic-theme = { path = "../libcosmic/cosmic-theme" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

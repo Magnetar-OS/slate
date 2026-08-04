@@ -1,0 +1,21 @@
+[Unit]
+Description=COSMIC Calendar reminder daemon
+Documentation=https://github.com/entro314-labs/cosmic-calendar
+# Reminders are desktop notifications, so there must be a session to show them in.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cosmic-calendar-daemon
+Restart=on-failure
+RestartSec=5
+# It only ever reads the calendar directory and talks to the session bus.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/calendars %h/.cache/cosmic-calendar
+
+[Install]
+WantedBy=graphical-session.target

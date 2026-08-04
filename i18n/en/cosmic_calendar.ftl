@@ -101,8 +101,25 @@ error-summary-required = Give the event a title.
 default-reminder = Default reminder
 default-reminder-description = Used for events that carry no reminder of their own.
 reminder-none = None
-reminder-minutes = { $minutes } minutes before
-reminder-hours = { $hours } hours before
+reminder-minutes = { $minutes } { $minutes ->
+        [one] minute
+       *[other] minutes
+    } before
+reminder-hours = { $hours } { $hours ->
+        [one] hour
+       *[other] hours
+    } before
 reminder-day-before = 1 day before
 reminder-now = Starting now
-reminder-in = In { $minutes } minutes
+reminder-in = In { $minutes } { $minutes ->
+        [one] minute
+       *[other] minutes
+    }
+
+## Import / export
+import = Import calendar…
+export = Export calendar…
+import-done = Imported { $added } new and { $updated } updated events.
+import-empty = No events found in { $path }.
+export-done = Exported to { $path }.
+error-remote-file = Only local files are supported.

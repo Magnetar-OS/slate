@@ -41,6 +41,31 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 dirs = "6"
 serde = { version = "1.0.229", features = ["derive"] }
 notify-rust = { version = "4.18", default-features = false, features = ["z"] }
+# Already in the tree via notify-rust's zbus backend. Used directly so the app and
+# the reminder daemon can agree on which of them owns notifications.
+zbus = "5.18"
+# pop-launcher speaks newline-delimited JSON on stdin/stdout.
+serde_json = "1"
+url = "2.5"
+
+[[bin]]
+name = "cosmic-calendar"
+path = "src/main.rs"
+
+[[bin]]
+name = "cosmic-calendar-applet"
+path = "src/bin/applet.rs"
+
+[[bin]]
+# Fires reminders with the window closed. Started by a systemd user unit.
+name = "cosmic-calendar-daemon"
+path = "src/bin/daemon.rs"
+
+[[bin]]
+# pop-launcher plugin: searching events from the COSMIC launcher.
+name = "cosmic-calendar-launcher"
+path = "src/bin/launcher.rs"
+
 
 [dependencies.libcosmic]
 git = "https://github.com/pop-os/libcosmic.git"
@@ -54,6 +79,8 @@ features = [
     "wgpu",
     # xdg portal dialogs on Linux
     "xdg-portal",
+    # Panel applet support, for the cosmic-calendar-applet binary.
+    "applet",
 ]
 
 [dev-dependencies]

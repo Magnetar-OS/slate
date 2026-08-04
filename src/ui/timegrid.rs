@@ -270,9 +270,12 @@ impl<'a> TimeGrid<'a> {
             occurrence.summary.clone()
         };
 
-        // A short block has room for one line only; give it the title and drop
-        // the time rather than clipping both.
-        let roomy = block.height >= HOUR_HEIGHT * 0.75;
+        // Two independent constraints. A short block has room for one line only,
+        // and a block sharing its slot with two or more others is too narrow for a
+        // time range — in both cases the title is the part worth keeping.
+        let tall_enough = block.height >= HOUR_HEIGHT * 0.75;
+        let wide_enough = block.columns < 3;
+        let roomy = tall_enough && wide_enough;
 
         let mut label = widget::column::with_capacity(3).push(
             widget::text::caption(summary)
@@ -293,6 +296,7 @@ impl<'a> TimeGrid<'a> {
 
             if let Some(location) = occurrence.location.as_deref().filter(|s| !s.is_empty())
                 && block.height >= HOUR_HEIGHT * 1.4
+                && block.columns == 1
             {
                 label = label.push(
                     widget::text::caption(location.to_owned())
@@ -302,16 +306,17 @@ impl<'a> TimeGrid<'a> {
             }
         }
 
-        let body = widget::row::with_capacity(2)
-            .spacing(spacing.space_xxxs)
-            .push(
+        let mut body = widget::row::with_capacity(2).spacing(spacing.space_xxxs);
+        if wide_enough {
+            body = body.push(
                 widget::container(widget::Space::new().width(Length::Fixed(3.0)))
                     .height(Length::Fill)
                     .class(color_bar(color)),
-            )
-            .push(label);
+            );
+        }
+        let body = body.push(label);
 
-        let block_button: Element<'a, Message> = widget::button::custom(body)
+        let button = widget::button::custom(body)
             .class(super::event_chip(color))
             .padding(2)
             .width(Length::Fill)
@@ -319,8 +324,20 @@ impl<'a> TimeGrid<'a> {
             .on_press(Message::OpenEvent(
                 occurrence.calendar_id.clone(),
                 occurrence.uid.clone(),
-            ))
-            .into();
+            ));
+
+        // When the label had to be abbreviated, hovering should still tell the
+        // whole story.
+        let block_button: Element<'a, Message> = if roomy {
+            button.into()
+        } else {
+            widget::tooltip(
+                button,
+                widget::text::caption(self.full_label(occurrence)),
+                widget::tooltip::Position::Top,
+            )
+            .into()
+        };
 
         // Horizontal placement: an equal-width slot per overlapping column. The
         // empty `Space` slots let clicks through to the hour cells underneath.
@@ -342,6 +359,20 @@ impl<'a> TimeGrid<'a> {
             .push(slots.height(Length::Fixed(block.height)))
             .width(Length::Fill)
             .into()
+    }
+
+    /// Everything about an occurrence, for the tooltip on an abbreviated block.
+    fn full_label(&self, occurrence: &Occurrence) -> String {
+        let mut out = format!(
+            "{}\n{}",
+            occurrence.summary,
+            super::format_range(occurrence.start, occurrence.end, self.config)
+        );
+        if let Some(location) = occurrence.location.as_deref().filter(|s| !s.is_empty()) {
+            out.push('\n');
+            out.push_str(location);
+        }
+        out
     }
 
     /// The line across today's column at the current time.

@@ -126,11 +126,75 @@ impl Scheduler {
     }
 }
 
+/// Well-known bus name claimed by whichever process is responsible for firing
+/// reminders.
+///
+/// The app and the background daemon can both be running, and both can see the
+/// same events. Without an arbiter the user would get every reminder twice. The
+/// daemon claims this name at startup; the app checks for it and stays quiet if
+/// someone already holds it.
+pub const OWNER_BUS_NAME: &str = "io.github.entro314labs.Calendar.Reminders";
+
+/// Claims responsibility for firing reminders.
+///
+/// Returns the connection on success — it must be kept alive, since dropping it
+/// releases the name. `Ok(None)` means someone else already owns it.
+pub async fn claim_ownership() -> Result<Option<zbus::Connection>, zbus::Error> {
+    use zbus::fdo::RequestNameFlags;
+    use zbus::fdo::RequestNameReply;
+
+    let connection = zbus::Connection::session().await?;
+    let reply = connection
+        .request_name_with_flags(
+            OWNER_BUS_NAME,
+            // Do not queue: if someone else has it, we want to know now rather
+            // than silently take over later.
+            RequestNameFlags::DoNotQueue.into(),
+        )
+        .await;
+
+    match reply {
+        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => Ok(Some(connection)),
+        Ok(_) => Ok(None),
+
+        // With `DoNotQueue`, zbus reports a name that is already held as an
+        // error rather than a reply variant. That is a normal outcome here — a
+        // second daemon should bow out quietly — so it must not be reported as a
+        // failure, or systemd's `Restart=on-failure` would spin forever.
+        Err(zbus::Error::NameTaken) => Ok(None),
+
+        Err(why) => Err(why),
+    }
+}
+
+/// Whether some other process is already firing reminders.
+///
+/// Any failure to reach the bus answers "no": a calendar with no reminders is a
+/// worse outcome than one that occasionally shows a duplicate.
+pub async fn someone_else_owns_reminders() -> bool {
+    let Ok(connection) = zbus::Connection::session().await else {
+        return false;
+    };
+    let Ok(proxy) = zbus::fdo::DBusProxy::new(&connection).await else {
+        return false;
+    };
+    let Ok(name) = zbus::names::BusName::try_from(OWNER_BUS_NAME) else {
+        return false;
+    };
+
+    proxy.name_has_owner(name).await.unwrap_or(false)
+}
+
 /// Sends one reminder to the desktop's notification service.
+///
+/// Async deliberately. Showing a notification is a D-Bus round trip, and
+/// `notify-rust`'s blocking variant spins up its own runtime to do it — which
+/// panics outright when called from inside one, as both the daemon and the app's
+/// executor are.
 ///
 /// Failure is logged, not surfaced: a missing notification daemon should not
 /// interrupt whatever the user is doing in the calendar.
-pub fn notify(reminder: &Reminder, app_id: &str, body: String) {
+pub async fn notify(reminder: &Reminder, app_id: &str, body: String) {
     let result = notify_rust::Notification::new()
         .appname("Calendar")
         .summary(&reminder.summary)
@@ -142,7 +206,8 @@ pub fn notify(reminder: &Reminder, app_id: &str, body: String) {
             "appointment.reminded".to_owned(),
         ))
         .timeout(notify_rust::Timeout::Never)
-        .show();
+        .show_async()
+        .await;
 
     match result {
         Ok(_) => tracing::debug!(summary = %reminder.summary, "reminder delivered"),

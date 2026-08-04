@@ -19,7 +19,18 @@ CalDAV sync is a matter of pointing `vdirsyncer` at the same directory.
 - **Reminders** as desktop notifications, honouring each event's own `VALARM`,
   with an optional app-wide default for events that carry none.
 - **Frosted glass**, following the COSMIC 1.3+ blur styling automatically.
+- **Import and export** `.ics` files through the desktop's file portal, and open a `.ics` from a file
+  manager or mail client — re-importing updates rather than duplicating.
 - Localised through Fluent; settings persisted through `cosmic-config`.
+
+Four binaries share one library:
+
+| Binary | What it is |
+| --- | --- |
+| `cosmic-calendar` | The application. |
+| `cosmic-calendar-applet` | Panel applet listing the next week. Add it in Settings → Desktop → Panel. |
+| `cosmic-calendar-daemon` | Fires reminders with the window closed. `systemctl --user enable --now cosmic-calendar-daemon` |
+| `cosmic-calendar-launcher` | pop-launcher plugin — type `cal ` in the launcher to search events. |
 
 ## Building
 
@@ -53,6 +64,8 @@ without needing a display.
 | `~/.local/share/calendars/` | Your calendars. One directory per calendar, one `.ics` per event. |
 | `~/.cache/cosmic-calendar/index.sqlite` | Query index. Pure cache — safe to delete, rebuilds itself. |
 | `~/.config/cosmic/io.github.entro314labs.Calendar/` | Settings, via `cosmic-config`. |
+| `/usr/share/pop-launcher/plugins/calendar/` | Launcher plugin registration. |
+| `/usr/lib/systemd/user/cosmic-calendar-daemon.service` | Reminder daemon unit. |
 
 Set `COSMIC_CALENDAR_DIR` to point the app at a different calendar directory — handy for testing
 against sample data without touching your real one.
@@ -78,8 +91,9 @@ store/
   index    SQLite range-query cache in front of them. Rebuildable.
   watcher  Debounced inotify, so external edits land in the UI.
 ui/        Month grid, time grid, sidebar, event editor.
-reminders/ Trigger scheduling (pure, tested) and notification delivery.
+reminders/ Trigger scheduling (pure, tested), delivery, and ownership arbitration.
 app.rs     State, messages, update loop.
+bin/       applet, daemon, launcher — thin shells over the library above.
 ```
 
 Two decisions worth knowing about:
@@ -124,10 +138,24 @@ Two deliberate details: a reminder fires at most once per occurrence (two instan
 series are distinct reminders, but re-reading the same file is not), and a trigger more than five
 minutes stale is dropped — otherwise opening the app in the evening would replay the whole day.
 
+## Desktop integration
+
+**Reminders with the window closed.** `cosmic-calendar-daemon` does nothing but watch the vdir and
+notify. Both it and the app can see the same events, so they arbitrate over a D-Bus name: the daemon
+claims `io.github.entro314labs.Calendar.Reminders` at startup, and the app checks for it and stays
+quiet while it is held. A second daemon bows out with a success exit code, because failing would put
+systemd's `Restart=on-failure` into a loop.
+
+**Opening a `.ics`.** The desktop entry is `DBusActivatable`, so a file manager or mail client hands
+the file to the already-running instance through `dbus_activation` rather than starting a second copy.
+Import is keyed on UID: opening the same file twice updates the events instead of duplicating them.
+
+**Launcher.** `cal <query>` searches summaries and locations across the previous month and the next
+six, nearest-first, one row per event rather than per occurrence — otherwise a daily standup fills the
+result list with itself.
+
 ## Known limitations
 
-- Reminders only fire while the app is running. A background service or an autostart entry would be
-  needed for alarms to reach you with the window closed.
 - No CalDAV sync built in — use `vdirsyncer` against the same directory.
 - Editing a single occurrence of a recurring series is not yet supported; edits apply to the whole
   series. `EXDATE` is read and written, so exclusions made by other tools survive a round-trip.

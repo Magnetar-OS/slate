@@ -2,7 +2,7 @@
 
 //! The sidebar: a mini month for jumping around, and the calendar list.
 
-use super::{color, panel_surface};
+use super::color;
 use crate::app::Message;
 use crate::config::Config;
 use crate::fl;
@@ -29,14 +29,23 @@ impl<'a> Sidebar<'a> {
     pub fn view(&self) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
 
+        // Rendered into libcosmic's nav-bar slot, so it wears the desktop's own
+        // nav-bar surface — same background, corner radii, and blur behaviour as
+        // the sidebar in cosmic-files or cosmic-settings.
         widget::column::with_capacity(3)
             .spacing(spacing.space_s)
             .push(self.mini_month())
             .push(self.calendar_list())
+            .push(widget::Space::new().height(Length::Fill))
             // libcosmic's calendar widget hard-codes a 360px content width, so
             // anything narrower makes its 7-column grid wrap onto two rows.
             .width(Length::Fixed(MINI_CALENDAR_WIDTH + 2.0 * GUTTER))
             .padding(GUTTER as u16)
+            .apply(widget::container)
+            .class(cosmic::theme::Container::custom(
+                cosmic::widget::nav_bar::nav_bar_style,
+            ))
+            .height(Length::Fill)
             .into()
     }
 
@@ -49,7 +58,6 @@ impl<'a> Sidebar<'a> {
             self.config.first_weekday_jiff(),
         )
         .apply(widget::container)
-        .class(panel_surface())
         .width(Length::Fixed(MINI_CALENDAR_WIDTH))
         .into()
     }
@@ -96,8 +104,7 @@ impl<'a> Sidebar<'a> {
 
         column
             .apply(widget::container)
-            .class(panel_surface())
-            .padding(spacing.space_xs)
+            .padding([spacing.space_xxs, 0])
             .width(Length::Fill)
             .into()
     }

@@ -16,6 +16,7 @@ use cosmic::prelude::*;
 use cosmic::widget::{self, about::About, menu, nav_bar, segmented_button};
 use futures::SinkExt;
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 
 const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
 /// Hour the week/day grid scrolls to when the day holds no timed events.
@@ -31,8 +32,8 @@ thread_local! {
         .map(|minutes| match minutes {
             0 => fl!("reminder-none"),
             1440 => fl!("reminder-day-before"),
-            m if *m < 60 => fl!("reminder-minutes", minutes = m.to_string()),
-            m => fl!("reminder-hours", hours = (m / 60).to_string()),
+            m if *m < 60 => fl!("reminder-minutes", minutes = i64::from(*m)),
+            m => fl!("reminder-hours", hours = i64::from(m / 60)),
         })
         .collect();
 }
@@ -68,6 +69,8 @@ pub struct AppModel {
 
     toasts: widget::Toasts<Message>,
     reminders: crate::reminders::Scheduler,
+    /// True while the background daemon owns reminders, so we stay quiet.
+    reminders_delegated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +139,29 @@ pub enum Message {
 
     /// Something on disk changed under us.
     FilesChanged,
+
+    // Import / export
+    ImportRequested,
+    ExportRequested,
+    ImportPath(PathBuf),
+    ExportTo(PathBuf, String),
+    DialogCancelled,
+    DialogFailed(String),
+
+    /// Whether another process (the daemon) is firing reminders for us.
+    ReminderOwnership(bool),
+
+    /// A background task finished and has nothing to report.
+    Ignore,
+}
+
+/// Start-up options, from the command line or a D-Bus activation.
+#[derive(Clone, Debug, Default)]
+pub struct Flags {
+    /// Open on this date rather than today.
+    pub initial_date: Option<NaiveDate>,
+    /// `.ics` files to import on start-up.
+    pub import: Vec<PathBuf>,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -155,6 +181,8 @@ pub enum MenuAction {
     Month,
     Week,
     Day,
+    Import,
+    Export,
 }
 
 impl menu::action::MenuAction for MenuAction {
@@ -169,13 +197,15 @@ impl menu::action::MenuAction for MenuAction {
             MenuAction::Month => Message::SetView(ViewKind::Month),
             MenuAction::Week => Message::SetView(ViewKind::Week),
             MenuAction::Day => Message::SetView(ViewKind::Day),
+            MenuAction::Import => Message::ImportRequested,
+            MenuAction::Export => Message::ExportRequested,
         }
     }
 }
 
 impl cosmic::Application for AppModel {
     type Executor = cosmic::executor::Default;
-    type Flags = ();
+    type Flags = Flags;
     type Message = Message;
 
     const APP_ID: &'static str = "io.github.entro314labs.Calendar";
@@ -188,10 +218,7 @@ impl cosmic::Application for AppModel {
         &mut self.core
     }
 
-    fn init(
-        core: cosmic::Core,
-        _flags: Self::Flags,
-    ) -> (Self, Task<cosmic::Action<Self::Message>>) {
+    fn init(core: cosmic::Core, flags: Self::Flags) -> (Self, Task<cosmic::Action<Self::Message>>) {
         let config_handler = cosmic_config::Config::new(Self::APP_ID, Config::VERSION).ok();
         let config = config_handler
             .as_ref()
@@ -215,6 +242,8 @@ impl cosmic::Application for AppModel {
         };
 
         let today = chrono::Local::now().date_naive();
+        // `--date` lets the applet and the launcher plugin open us on a specific day.
+        let anchor = flags.initial_date.unwrap_or(today);
 
         let mut views = segmented_button::SingleSelectModel::default();
         for kind in ViewKind::ALL {
@@ -244,7 +273,7 @@ impl cosmic::Application for AppModel {
             config_handler,
             store,
             fatal,
-            anchor: today,
+            anchor,
             today,
             now: chrono::Local::now().naive_local(),
             days: BTreeMap::new(),
@@ -254,6 +283,9 @@ impl cosmic::Application for AppModel {
             new_calendar_name: None,
             toasts: widget::Toasts::new(Message::CloseToast),
             reminders: crate::reminders::Scheduler::new(),
+            // Assumed until the check comes back, so a fast-starting daemon never
+            // races us into a duplicate notification.
+            reminders_delegated: true,
         };
 
         {
@@ -273,8 +305,22 @@ impl cosmic::Application for AppModel {
         }
 
         app.reload();
-        let command = Task::batch([app.update_title(), Self::request_scroll()]);
-        (app, command)
+        let mut startup = vec![
+            app.update_title(),
+            Self::request_scroll(),
+            // Ask the bus whether the daemon is already handling reminders.
+            cosmic::task::future(async {
+                Message::ReminderOwnership(crate::reminders::someone_else_owns_reminders().await)
+            }),
+        ];
+
+        for path in flags.import {
+            startup.push(cosmic::task::message(cosmic::Action::App(
+                Message::ImportPath(path),
+            )));
+        }
+
+        (app, Task::batch(startup))
     }
 
     fn header_start(&self) -> Vec<Element<'_, Self::Message>> {
@@ -349,9 +395,32 @@ impl cosmic::Application for AppModel {
     }
 
     fn nav_model(&self) -> Option<&nav_bar::Model> {
-        // Calendars are a filter, not a set of pages, so they live in our own
-        // sidebar rather than the nav bar.
+        // Calendars are a filter, not a set of pages, so the stock nav-bar model
+        // is the wrong shape for them. `nav_bar` below fills the slot instead,
+        // which is what gives us the toggle button and the correct chrome.
         None
+    }
+
+    /// Puts our sidebar in libcosmic's nav-bar slot.
+    ///
+    /// Overriding this rather than `nav_model` keeps the desktop's nav-bar
+    /// styling, padding, and the header toggle button, while letting the content
+    /// be a mini month and a set of visibility toggles — neither of which the
+    /// single-select nav model can express.
+    fn nav_bar(&self) -> Option<Element<'_, cosmic::Action<Self::Message>>> {
+        if !self.core().nav_bar_active() || self.fatal.is_some() {
+            return None;
+        }
+
+        let sidebar = Sidebar {
+            mini: &self.mini,
+            calendars: self.calendars(),
+            config: &self.config,
+            new_calendar_name: self.new_calendar_name.as_ref(),
+        }
+        .view();
+
+        Some(sidebar.map(cosmic::Action::App))
     }
 
     fn context_drawer(&self) -> Option<context_drawer::ContextDrawer<'_, Self::Message>> {
@@ -385,8 +454,6 @@ impl cosmic::Application for AppModel {
     }
 
     fn view(&self) -> Element<'_, Self::Message> {
-        let spacing = cosmic::theme::spacing();
-
         if let Some(fatal) = &self.fatal {
             return widget::text::body(format!("{}\n\n{fatal}", fl!("error-load-calendars")))
                 .apply(widget::container)
@@ -394,29 +461,59 @@ impl cosmic::Application for AppModel {
                 .into();
         }
 
-        let calendars = self.calendars();
-
-        let sidebar = Sidebar {
-            mini: &self.mini,
-            calendars,
-            config: &self.config,
-            new_calendar_name: self.new_calendar_name.as_ref(),
-        }
-        .view();
-
-        let main = self.grid(calendars);
-
-        let content = widget::row::with_capacity(2)
-            .spacing(spacing.space_xxs)
-            .push(sidebar)
-            .push(
-                main.apply(widget::container)
-                    .width(Length::Fill)
-                    .height(Length::Fill),
-            );
+        let content = self
+            .grid(self.calendars())
+            .apply(widget::container)
+            .width(Length::Fill)
+            .height(Length::Fill);
 
         // The toaster overlays transient errors without stealing focus.
         widget::toaster(&self.toasts, content)
+    }
+
+    /// Handles being activated over D-Bus.
+    ///
+    /// This is what makes the `MimeType=text/calendar` line in the desktop entry
+    /// mean something: opening a `.ics` from a file manager or a mail client
+    /// reaches the already-running instance here instead of starting a second
+    /// copy. `single-instance` in the libcosmic feature list is what routes it.
+    fn dbus_activation(
+        &mut self,
+        msg: cosmic::dbus_activation::Message,
+    ) -> Task<cosmic::Action<Self::Message>> {
+        use cosmic::dbus_activation::Details;
+
+        match msg.msg {
+            // Plain launch: just raise the window, which the runtime has already done.
+            Details::Activate => Task::none(),
+
+            Details::Open { url } => {
+                let paths: Vec<PathBuf> = url
+                    .iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .collect();
+
+                if paths.is_empty() {
+                    tracing::warn!(?url, "activation carried no local files");
+                    return Task::none();
+                }
+
+                Task::batch(paths.into_iter().map(|path| {
+                    cosmic::task::message(cosmic::Action::App(Message::ImportPath(path)))
+                }))
+            }
+
+            Details::ActivateAction { action, args } => match action.as_str() {
+                // Exposed as a desktop action, so "New Event" works from the
+                // launcher and the dock's context menu.
+                "new-event" => cosmic::task::message(cosmic::Action::App(Message::NewEvent)),
+                "today" => cosmic::task::message(cosmic::Action::App(Message::Today)),
+                other => {
+                    tracing::warn!(action = other, ?args, "unknown activation action");
+                    Task::none()
+                }
+            },
+        }
     }
 
     fn subscription(&self) -> Subscription<Self::Message> {
@@ -702,8 +799,85 @@ impl cosmic::Application for AppModel {
                     self.today = today;
                     self.reload();
                 }
-                self.fire_due_reminders();
+                return self.fire_due_reminders();
             }
+
+            Message::ReminderOwnership(delegated) => {
+                if delegated {
+                    tracing::info!("the reminder daemon is running; leaving reminders to it");
+                }
+                self.reminders_delegated = delegated;
+            }
+
+            Message::ImportRequested => {
+                return cosmic::task::future(async {
+                    use cosmic::dialog::file_chooser::{self, FileFilter};
+
+                    let dialog = file_chooser::open::Dialog::new()
+                        .title(fl!("import"))
+                        .filter(FileFilter::new("iCalendar").glob("*.ics"));
+
+                    match dialog.open_file().await {
+                        Ok(response) => match response.url().to_file_path() {
+                            Ok(path) => Message::ImportPath(path),
+                            Err(()) => Message::DialogFailed(fl!("error-remote-file")),
+                        },
+                        Err(file_chooser::Error::Cancelled) => Message::DialogCancelled,
+                        Err(why) => Message::DialogFailed(why.to_string()),
+                    }
+                });
+            }
+
+            Message::ExportRequested => {
+                let Some(calendar) = self
+                    .store
+                    .as_ref()
+                    .and_then(|store| store.calendars().first())
+                    .map(|c| (c.id.clone(), c.name.clone()))
+                else {
+                    return self.toast_error(&fl!("no-calendars"));
+                };
+
+                let (id, name) = calendar;
+                return cosmic::task::future(async move {
+                    use cosmic::dialog::file_chooser::{self, FileFilter};
+
+                    let dialog = file_chooser::save::Dialog::new()
+                        .title(fl!("export"))
+                        .file_name(format!("{name}.ics"))
+                        .filter(FileFilter::new("iCalendar").glob("*.ics"));
+
+                    match dialog.save_file().await {
+                        Ok(response) => match response.url().and_then(|u| u.to_file_path().ok()) {
+                            Some(path) => Message::ExportTo(path, id),
+                            None => Message::DialogFailed(fl!("error-remote-file")),
+                        },
+                        Err(file_chooser::Error::Cancelled) => Message::DialogCancelled,
+                        Err(why) => Message::DialogFailed(why.to_string()),
+                    }
+                });
+            }
+
+            Message::ImportPath(path) => return self.import(&path),
+
+            Message::ExportTo(path, calendar_id) => {
+                let Some(store) = self.store.as_ref() else {
+                    return Task::none();
+                };
+                match store
+                    .export_calendar(&calendar_id)
+                    .and_then(|text| std::fs::write(&path, text).map_err(Into::into))
+                {
+                    Ok(()) => {
+                        return self.toast(&fl!("export-done", path = file_label(&path)));
+                    }
+                    Err(why) => return self.toast_error(&why.to_string()),
+                }
+            }
+
+            Message::DialogCancelled | Message::Ignore => {}
+
+            Message::DialogFailed(why) => return self.toast_error(&why),
 
             Message::FilesChanged => {
                 if let Some(store) = self.store.as_mut() {
@@ -862,9 +1036,14 @@ impl AppModel {
     ///
     /// Reminders are checked against the store rather than the currently visible
     /// range, so they still fire while you are looking at a different month.
-    fn fire_due_reminders(&mut self) {
+    fn fire_due_reminders(&mut self) -> Task<cosmic::Action<Message>> {
+        // The daemon has it covered; firing here too would double every reminder.
+        if self.reminders_delegated {
+            return Task::none();
+        }
+
         let Some(store) = self.store.as_ref() else {
-            return;
+            return Task::none();
         };
 
         let today = self.now.date();
@@ -873,7 +1052,7 @@ impl AppModel {
                 Ok(occurrences) => occurrences,
                 Err(why) => {
                     tracing::warn!(%why, "could not load occurrences to check reminders");
-                    return;
+                    return Task::none();
                 }
             };
 
@@ -899,16 +1078,27 @@ impl AppModel {
             tracing::info!(count = due.len(), "firing reminders");
         }
 
-        for reminder in &due {
-            crate::reminders::notify(
-                reminder,
-                <Self as cosmic::Application>::APP_ID,
-                self.reminder_body(reminder),
-            );
-        }
+        // Delivery is a D-Bus round trip, so it happens off the update loop.
+        let tasks: Vec<_> = due
+            .into_iter()
+            .map(|reminder| {
+                let body = self.reminder_body(&reminder);
+                cosmic::task::future(async move {
+                    crate::reminders::notify(
+                        &reminder,
+                        <Self as cosmic::Application>::APP_ID,
+                        body,
+                    )
+                    .await;
+                    Message::Ignore
+                })
+            })
+            .collect();
 
         // Keep the fired set from growing for the lifetime of the process.
         self.reminders.forget_before(self.now - Duration::days(1));
+
+        Task::batch(tasks)
     }
 
     fn reminder_body(&self, reminder: &crate::reminders::Reminder) -> String {
@@ -919,7 +1109,7 @@ impl AppModel {
             if minutes <= 0 {
                 fl!("reminder-now")
             } else {
-                fl!("reminder-in", minutes = minutes.to_string())
+                fl!("reminder-in", minutes = minutes)
             }
         };
 
@@ -1102,6 +1292,48 @@ impl AppModel {
         }
     }
 
+    /// Imports a `.ics` file into the default calendar.
+    fn import(&mut self, path: &std::path::Path) -> Task<cosmic::Action<Message>> {
+        let Some(calendar_id) = self
+            .store
+            .as_ref()
+            .and_then(Store::default_calendar)
+            .map(|c| c.id.clone())
+        else {
+            return self.toast_error(&fl!("no-calendars"));
+        };
+
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(why) => return self.toast_error(&format!("{}: {why}", file_label(path))),
+        };
+
+        let Some(store) = self.store.as_mut() else {
+            return Task::none();
+        };
+
+        match store.import_ics(&text, &calendar_id) {
+            Ok(summary) if summary.total() == 0 => {
+                self.toast_error(&fl!("import-empty", path = file_label(path)))
+            }
+            Ok(summary) => {
+                self.reload();
+                self.toast(&fl!(
+                    "import-done",
+                    added = summary.added.to_string(),
+                    updated = summary.updated.to_string()
+                ))
+            }
+            Err(why) => self.toast_error(&why.to_string()),
+        }
+    }
+
+    fn toast(&mut self, message: &str) -> Task<cosmic::Action<Message>> {
+        self.toasts
+            .push(widget::Toast::new(message.to_owned()))
+            .map(cosmic::Action::App)
+    }
+
     fn toast_error(&mut self, message: &str) -> Task<cosmic::Action<Message>> {
         tracing::error!(message);
         self.toasts
@@ -1126,6 +1358,14 @@ impl AppModel {
             Task::none()
         }
     }
+}
+
+/// A path's file name, for user-facing messages.
+fn file_label(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into(),
+    )
 }
 
 fn view_label(kind: ViewKind) -> String {

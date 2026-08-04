@@ -135,6 +135,10 @@ impl Index {
         // NORMAL sync is right for a cache we can always rebuild.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // The app, the applet, the daemon, and the launcher plugin all open this
+        // cache. WAL lets them read concurrently, but writers still serialise —
+        // without a busy timeout the loser gets SQLITE_BUSY instead of waiting.
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
 
         // The version has to be readable before the data tables are touched, so
         // `meta` is created on its own first.

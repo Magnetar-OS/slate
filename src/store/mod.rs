@@ -38,6 +38,61 @@ pub enum StoreError {
     NoCalendars,
 }
 
+/// What an import did, so the UI can say so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImportSummary {
+    pub added: usize,
+    pub updated: usize,
+}
+
+impl ImportSummary {
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.added + self.updated
+    }
+}
+
+/// Makes a UID safe to use as a file name.
+///
+/// UIDs are arbitrary text and routinely contain `/` and `@`; without this an
+/// imported file could escape its collection directory.
+fn sanitise_file_stem(uid: &str) -> String {
+    let cleaned: String = uid
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    // Path separators are already gone, so this cannot traverse. Collapsing runs
+    // of dots anyway keeps `..` out of file names entirely, which is one less
+    // thing for a future reader to have to reason about.
+    let mut collapsed = String::with_capacity(cleaned.len());
+    let mut last_was_dot = false;
+    for c in cleaned.chars() {
+        if c == '.' {
+            if !last_was_dot {
+                collapsed.push(c);
+            }
+            last_was_dot = true;
+        } else {
+            collapsed.push(c);
+            last_was_dot = false;
+        }
+    }
+
+    let trimmed = collapsed.trim_matches('.').trim_matches('-');
+    if trimmed.is_empty() {
+        uuid::Uuid::new_v4().to_string()
+    } else {
+        trimmed.chars().take(120).collect()
+    }
+}
+
 /// Everything the UI needs from disk.
 pub struct Store {
     root: PathBuf,
@@ -241,6 +296,60 @@ impl Store {
         vdir::delete_event(&from_meta, &event.file_name)?;
         self.index.sync_calendar(&from_meta)?;
         Ok(moved)
+    }
+
+    /// Imports the events from an iCalendar document into `calendar_id`.
+    ///
+    /// An event whose UID is already present is updated rather than duplicated,
+    /// which is what makes re-importing the same file safe — and what makes this
+    /// usable as the handler for opening a `.ics` from a file manager or a mail
+    /// attachment.
+    pub fn import_ics(
+        &mut self,
+        text: &str,
+        calendar_id: &str,
+    ) -> Result<ImportSummary, StoreError> {
+        let meta = self
+            .calendar(calendar_id)
+            .ok_or_else(|| StoreError::UnknownCalendar(calendar_id.to_owned()))?
+            .clone();
+
+        if meta.read_only {
+            return Err(StoreError::ReadOnly(meta.name));
+        }
+
+        let incoming = vdir::parse_ics(text, calendar_id, "");
+        let mut summary = ImportSummary::default();
+
+        for mut event in incoming {
+            // Reuse the existing file when the UID is already known, so a second
+            // import overwrites instead of accumulating copies.
+            match self.index.event(calendar_id, &event.uid)? {
+                Some(existing) => {
+                    event.file_name = existing.file_name;
+                    summary.updated += 1;
+                }
+                None => {
+                    event.file_name = format!("{}.ics", sanitise_file_stem(&event.uid));
+                    summary.added += 1;
+                }
+            }
+
+            event.calendar_id = calendar_id.to_owned();
+            vdir::write_event(&meta, &event)?;
+        }
+
+        self.index.sync_calendar(&meta)?;
+        Ok(summary)
+    }
+
+    /// Serialises a whole calendar as one iCalendar document.
+    pub fn export_calendar(&self, calendar_id: &str) -> Result<String, StoreError> {
+        let meta = self
+            .calendar(calendar_id)
+            .ok_or_else(|| StoreError::UnknownCalendar(calendar_id.to_owned()))?;
+
+        Ok(vdir::export_collection(meta))
     }
 
     /// Creates a new collection on disk.
@@ -458,6 +567,124 @@ mod tests {
             .unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].summary, "From sync");
+    }
+
+    const SAMPLE: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\n\
+         BEGIN:VEVENT\r\nUID:imported-1@test\r\nDTSTART:20260804T090000Z\r\n\
+         DTEND:20260804T100000Z\r\nSUMMARY:Imported one\r\nEND:VEVENT\r\n\
+         BEGIN:VEVENT\r\nUID:imported-2@test\r\nDTSTART:20260805T090000Z\r\n\
+         DTEND:20260805T100000Z\r\nSUMMARY:Imported two\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    #[test]
+    fn import_adds_every_event() {
+        let (_dir, mut store) = store();
+        let cal = store.create_calendar("Personal", Rgb(1, 2, 3)).unwrap();
+
+        let summary = store.import_ics(SAMPLE, &cal.id).unwrap();
+        assert_eq!(summary.added, 2);
+        assert_eq!(summary.updated, 0);
+
+        let got = store
+            .occurrences(day(2026, 8, 1), day(2026, 9, 1), &HashSet::new())
+            .unwrap();
+        assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn importing_the_same_file_twice_updates_rather_than_duplicates() {
+        let (_dir, mut store) = store();
+        let cal = store.create_calendar("Personal", Rgb(1, 2, 3)).unwrap();
+
+        store.import_ics(SAMPLE, &cal.id).unwrap();
+        let second = store.import_ics(SAMPLE, &cal.id).unwrap();
+
+        assert_eq!(second.added, 0, "re-import created duplicates");
+        assert_eq!(second.updated, 2);
+        assert_eq!(
+            store
+                .occurrences(day(2026, 8, 1), day(2026, 9, 1), &HashSet::new())
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_uid_with_path_separators_cannot_escape_the_collection() {
+        let (_dir, mut store) = store();
+        let cal = store.create_calendar("Personal", Rgb(1, 2, 3)).unwrap();
+
+        let nasty = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//x//EN\r\n\
+                     BEGIN:VEVENT\r\nUID:../../../../tmp/escaped\r\n\
+                     DTSTART:20260804T090000Z\r\nDTEND:20260804T100000Z\r\n\
+                     SUMMARY:Nasty\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+        store.import_ics(nasty, &cal.id).unwrap();
+
+        let written: Vec<String> = std::fs::read_dir(&cal.path)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".ics"))
+            .collect();
+
+        assert_eq!(written.len(), 1);
+        assert!(
+            !written[0].contains('/') && !written[0].contains(".."),
+            "unsanitised UID became the file name: {}",
+            written[0]
+        );
+
+        // The property that actually matters: the file landed inside the collection.
+        let written_path = cal.path.join(&written[0]).canonicalize().unwrap();
+        assert!(
+            written_path.starts_with(cal.path.canonicalize().unwrap()),
+            "import escaped the collection directory: {}",
+            written_path.display()
+        );
+    }
+
+    #[test]
+    fn export_round_trips_through_import() {
+        let (_dir, mut store) = store();
+        let a = store.create_calendar("Personal", Rgb(1, 2, 3)).unwrap();
+        let b = store.create_calendar("Work", Rgb(4, 5, 6)).unwrap();
+
+        store.import_ics(SAMPLE, &a.id).unwrap();
+        let exported = store.export_calendar(&a.id).unwrap();
+
+        let summary = store.import_ics(&exported, &b.id).unwrap();
+        assert_eq!(summary.added, 2, "export lost events on the way back in");
+
+        let hidden: HashSet<String> = [a.id.clone()].into_iter().collect();
+        let in_b = store
+            .occurrences(day(2026, 8, 1), day(2026, 9, 1), &hidden)
+            .unwrap();
+        assert_eq!(in_b.len(), 2);
+        assert!(in_b.iter().all(|o| o.calendar_id == b.id));
+    }
+
+    #[test]
+    fn exporting_an_unknown_calendar_is_an_error() {
+        let (_dir, store) = store();
+        assert!(matches!(
+            store.export_calendar("nope"),
+            Err(StoreError::UnknownCalendar(_))
+        ));
+    }
+
+    #[test]
+    fn sanitised_stems_stay_usable() {
+        assert_eq!(sanitise_file_stem("abc-123"), "abc-123");
+        assert_eq!(sanitise_file_stem("a@b.com"), "a-b.com");
+        assert_eq!(
+            sanitise_file_stem("a..b"),
+            "a.b",
+            "consecutive dots survived"
+        );
+        assert!(!sanitise_file_stem("../../etc/passwd").contains(".."));
+        // An entirely unusable UID still yields something writable.
+        assert!(!sanitise_file_stem("///").is_empty());
     }
 
     #[test]

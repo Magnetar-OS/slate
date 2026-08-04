@@ -406,6 +406,13 @@ fn from_event_time(t: EventTime) -> DatePerhapsTime {
 /// Serialises an event to iCalendar text.
 #[must_use]
 pub fn to_ics(event: &Event) -> String {
+    let mut calendar = Calendar::new();
+    calendar.push(build_ical_event(event));
+    calendar.to_string()
+}
+
+/// Builds the `VEVENT` for one event.
+fn build_ical_event(event: &Event) -> icalendar::Event {
     let mut ical = icalendar::Event::new();
     ical.uid(&event.uid)
         .summary(&event.summary)
@@ -441,9 +448,7 @@ pub fn to_ics(event: &Event) -> String {
         ));
     }
 
-    let mut calendar = Calendar::new();
-    calendar.push(ical.done());
-    calendar.to_string()
+    ical.done()
 }
 
 fn format_ical_datetime(dt: NaiveDateTime, like: EventTime) -> String {
@@ -452,6 +457,19 @@ fn format_ical_datetime(dt: NaiveDateTime, like: EventTime) -> String {
     } else {
         dt.format("%Y%m%dT%H%M%S").to_string()
     }
+}
+
+/// Serialises every event in a collection into a single iCalendar document.
+#[must_use]
+pub fn export_collection(meta: &CalendarMeta) -> String {
+    let mut calendar = Calendar::new();
+    calendar.name(&meta.name);
+
+    for event in read_collection(meta) {
+        calendar.push(build_ical_event(&event));
+    }
+
+    calendar.to_string()
 }
 
 /// Writes an event to its collection, replacing any existing file.

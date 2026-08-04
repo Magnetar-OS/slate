@@ -1,0 +1,16 @@
+(
+    name: "Calendar",
+    description: "Search your calendar events",
+    bin: (
+        path: "cosmic-calendar-launcher",
+    ),
+    icon: Some(Name("x-office-calendar")),
+    query: (
+        // Only run when the query starts with "cal ", so the plugin does not
+        // search every keystroke typed into the launcher.
+        help: Some("cal "),
+        isolate: false,
+        persistent: false,
+        priority: Default,
+    ),
+)

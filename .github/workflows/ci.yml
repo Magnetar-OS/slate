@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Cheap and independent of the Rust toolchain, so it runs on its own and
+  # reports in seconds rather than behind a fifteen-minute libcosmic build.
+  metadata:
+    name: Metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install validators
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y appstream desktop-file-utils
+
+      - uses: extractions/setup-just@v3
+
+      - name: Validate desktop entries and AppStream metadata
+        run: just validate-metadata
+
+  build:
+    name: Check, lint, and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The substrate is a path dependency and lives in its own repository, so
+      # it has to be checked out beside this one for anything to build. Kept as
+      # a sibling directory because that is what Cargo.toml's `../cosmic-pim`
+      # resolves to.
+      - name: Check out the shared substrate
+        uses: actions/checkout@v5
+        with:
+          repository: entro314-labs/cosmic-pim
+          path: cosmic-pim-checkout
+
+      - name: Place the substrate where Cargo.toml expects it
+        run: mv cosmic-pim-checkout ../cosmic-pim
+
+      # libcosmic pulls in the Wayland, XKB, and OpenSSL stacks.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwayland-dev libxkbcommon-dev libssl-dev libsqlite3-dev \
+            libudev-dev libinput-dev pkg-config
+
+      # No toolchain action on purpose: rustup on the runner reads
+      # rust-toolchain.toml, so the pin and its components apply here with no
+      # second place to keep in sync.
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: extractions/setup-just@v3
+
+      - name: Formatting
+        run: just fmt-check
+
+      - name: Clippy
+        run: just check
+
+      - name: Tests
+        run: just test

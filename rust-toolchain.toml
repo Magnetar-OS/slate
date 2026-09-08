@@ -1,0 +1,6 @@
+# Kept in agreement with `rust-version` in Cargo.toml — the convention across
+# the COSMIC repositories, so one distro toolchain builds the whole set and CI
+# takes its toolchain from this file with no extra configuration.
+[toolchain]
+channel = "1.98"
+components = ["clippy", "rustfmt"]

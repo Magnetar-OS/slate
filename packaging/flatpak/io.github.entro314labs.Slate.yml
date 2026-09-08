@@ -1,0 +1,74 @@
+# Flathub manifest — SKELETON, M8 prep. Not yet buildable: it needs
+# `cargo-sources.json` generated from a *tagged* Cargo.lock (see the recipe at
+# the bottom) and the cosmic-pim path dependencies replaced by git tags first.
+#
+# Scope: the Flatpak ships the `slate` application ONLY. The other three
+# binaries structurally cannot work from inside the sandbox and stay with the
+# native packages (nfpm, ../linux/nfpm.yaml):
+#   - slate-applet    cosmic-panel spawns applets from host desktop entries
+#   - slate-daemon    a systemd user unit; also, reminders belong to whichever
+#                     process claims the D-Bus name, which the app does fine
+#   - slate-launcher  pop-launcher loads plugins from host paths
+app-id: io.github.entro314labs.Slate
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+# Ships the COSMIC theming stack the app expects at runtime.
+base: com.system76.Cosmic.BaseApp
+base-version: stable
+command: slate
+
+finish-args:
+  # Wayland first, X11 as fallback
+  - --socket=wayland
+  - --share=ipc
+  - --socket=fallback-x11
+  # wgpu rendering
+  - --device=dri
+  # CalDAV sync
+  - --share=network
+  # Reminder notifications while the window is open
+  - --talk-name=org.freedesktop.Notifications
+  # Live theme and settings updates from the COSMIC settings daemon.
+  # The wildcard covers the per-config proxy names it creates dynamically.
+  - --talk-name=com.system76.CosmicSettingsDaemon
+  - --talk-name=com.system76.CosmicSettingsDaemon.*
+  # flathub-linter: skip=finish-args-unnecessary-xdg-config-cosmic-rw-access
+  - --filesystem=xdg-config/cosmic:rw
+  # The vdir IS the interop story: khal, vdirsyncer, Thunderbird and the
+  # native daemon all read the same directories, so they must be the host's,
+  # not a sandbox-private copy that silently forks the user's calendar.
+  - --filesystem=~/.local/share/calendars:rw
+  - --filesystem=~/.local/share/contacts:rw
+  # Shared account store (suite-wide, see cosmic-pim), and the envelope
+  # secret-store fallback for when no keychain portal answers.
+  - --filesystem=xdg-config/cosmic-pim:rw
+  - --filesystem=~/.local/share/cosmic-pim:rw
+
+modules:
+  - name: slate
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/slate/cargo
+    build-commands:
+      - cargo --offline build --release --locked --bin slate
+      - install -Dm0755 target/release/slate /app/bin/slate
+      - install -Dm0644 resources/io.github.entro314labs.Slate.desktop
+        /app/share/applications/io.github.entro314labs.Slate.desktop
+      - install -Dm0644 resources/io.github.entro314labs.Slate.metainfo.xml
+        /app/share/metainfo/io.github.entro314labs.Slate.metainfo.xml
+      - install -Dm0644 resources/icons/hicolor/scalable/apps/icon.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.entro314labs.Slate.svg
+    sources:
+      - type: git
+        url: https://github.com/entro314-labs/slate.git
+        # Pin to the release tag when one exists.
+        tag: TODO-release-tag
+      # Generated from the tag's Cargo.lock; regenerate on every release:
+      #   python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+      # (tool: github.com/flatpak/flatpak-builder-tools/tree/master/cargo)
+      - cargo-sources.json

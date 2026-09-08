@@ -1,7 +1,7 @@
 # Slate — feature parity audit
 
 Audited 2026-08-27, per the method in the suite roadmap
-([cosmic-pim/ROADMAP.md](https://github.com/entro314-labs/cosmic-pim/blob/main/ROADMAP.md)):
+([cosmic-pim/ROADMAP.md](https://github.com/Magnetar-OS/cosmic-pim/blob/main/ROADMAP.md)):
 walk the benchmark app's feature surface row by row, and mark each row
 **have / partial / gap / rejected** — a rejection with a reason is an answer,
 an unlisted feature is a hole. Rows I could not confirm against Slate's code

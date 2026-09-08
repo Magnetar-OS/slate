@@ -10,18 +10,18 @@ Thunderbird, and anything else that speaks `.ics`.
 **CalDAV sync is built in** — add an account under *Accounts* and Slate syncs it directly, in the app
 and in the background daemon. You can instead point `vdirsyncer` at the same directory if you prefer;
 what you must not do is both, on the same collection. See
-[one sync engine per collection](https://github.com/entro314-labs/cosmic-pim/blob/main/ARCHITECTURE.md#one-sync-engine-per-collection).
+[one sync engine per collection](https://github.com/Magnetar-OS/cosmic-pim/blob/main/ARCHITECTURE.md#one-sync-engine-per-collection).
 
 ## Part of a suite
 
 Slate is one of three applications over a shared substrate,
-[cosmic-pim](https://github.com/entro314-labs/cosmic-pim):
+[cosmic-pim](https://github.com/Magnetar-OS/cosmic-pim):
 
 | App | Repository | What it is |
 |---|---|---|
 | **Slate** | you are here | Calendar and tasks |
-| **Circle** | [circle](https://github.com/entro314-labs/circle) | Contacts |
-| **Envelope** | [envelope](https://github.com/entro314-labs/envelope) | Mail (scaffold) |
+| **Circle** | [circle](https://github.com/Magnetar-OS/circle) | Contacts |
+| **Envelope** | [envelope](https://github.com/Magnetar-OS/envelope) | Mail (scaffold) |
 
 The substrate owns everything below the user interface: the model, the
 iCalendar/vCard layer, the vdir on disk, CalDAV and CardDAV, accounts and
@@ -36,7 +36,7 @@ Two consequences worth knowing:
 - **Fixes are shared.** A bug in the sync reconciler is fixed in `cosmic-pim`
   and all three apps get it. Please do not work around substrate bugs here.
 
-[cosmic-pim/ARCHITECTURE.md](https://github.com/entro314-labs/cosmic-pim/blob/main/ARCHITECTURE.md)
+[cosmic-pim/ARCHITECTURE.md](https://github.com/Magnetar-OS/cosmic-pim/blob/main/ARCHITECTURE.md)
 is the canonical description of how the layers fit and where new code belongs.
 
 ## Features
@@ -266,9 +266,9 @@ editable as themselves, and removable to restore the generated instance.
 
 GPL-3.0-only for this application.
 
-The [cosmic-pim](https://github.com/entro314-labs/cosmic-pim) substrate it links
+The [cosmic-pim](https://github.com/Magnetar-OS/cosmic-pim) substrate it links
 is MPL-2.0 — deliberately, so that the engine can be shared with non-GPL
 consumers while improvements to *it* stay public. MPL-2.0 is a Secondary Licence
 under its own §3.3, so GPL-3 absorbs it and the distributed binary is GPL-3 as a
 whole. See [LICENSING.md](LICENSING.md), and the fuller rationale in
-[cosmic-pim/LICENSING.md](https://github.com/entro314-labs/cosmic-pim/blob/main/LICENSING.md).
+[cosmic-pim/LICENSING.md](https://github.com/Magnetar-OS/cosmic-pim/blob/main/LICENSING.md).

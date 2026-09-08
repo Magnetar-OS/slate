@@ -7,7 +7,7 @@ files-as-truth, substrate-backed.
 
 This document orders the work. [02-slate.md](02-slate.md) is the underlying gap analysis; the
 substrate's own roadmap lives in
-[cosmic-pim](https://github.com/entro314-labs/cosmic-pim). No dates — milestones are
+[cosmic-pim](https://github.com/Magnetar-OS/cosmic-pim). No dates — milestones are
 dependency-ordered and each has an exit criterion, because "done" must be checkable.
 
 ## Benchmarks

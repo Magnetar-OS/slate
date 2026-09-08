@@ -7,7 +7,7 @@ edition = "2024"
 # LICENSING.md there for why the split exists and the one trap to avoid.
 license = "GPL-3.0-only"
 description = "Slate — a calendar and task list for the COSMIC desktop"
-repository = "https://github.com/entro314-labs/slate"
+repository = "https://github.com/Magnetar-OS/slate"
 rust-version = "1.98.0"
 
 [dependencies]

@@ -65,7 +65,7 @@ modules:
         /app/share/icons/hicolor/scalable/apps/io.github.entro314labs.Slate.svg
     sources:
       - type: git
-        url: https://github.com/entro314-labs/slate.git
+        url: https://github.com/Magnetar-OS/slate.git
         # Pin to the release tag when one exists.
         tag: TODO-release-tag
       # Generated from the tag's Cargo.lock; regenerate on every release:

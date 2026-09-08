@@ -8,7 +8,7 @@ of the binaries it produces.
 | Layer | Licence |
 |---|---|
 | This repository — Slate and its binaries | **GPL-3.0-only** |
-| [cosmic-pim](https://github.com/entro314-labs/cosmic-pim), the shared substrate it links | **MPL-2.0** |
+| [cosmic-pim](https://github.com/Magnetar-OS/cosmic-pim), the shared substrate it links | **MPL-2.0** |
 
 The substrate is MPL-2.0 on purpose. Its boundary is the *file*: modify a file in
 cosmic-pim and you publish that file, but linking it imposes nothing on your own
@@ -40,7 +40,7 @@ obligations that travel with the binary.
 
 Why MPL and not MIT, why not LGPL, the provenance of the borrowed code, and the
 outstanding obligations live in
-[cosmic-pim/LICENSING.md](https://github.com/entro314-labs/cosmic-pim/blob/main/LICENSING.md).
+[cosmic-pim/LICENSING.md](https://github.com/Magnetar-OS/cosmic-pim/blob/main/LICENSING.md).
 That is the canonical copy; this file only records what the arrangement means
 for **this** repository.
 

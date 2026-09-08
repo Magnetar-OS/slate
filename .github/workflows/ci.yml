@@ -46,7 +46,7 @@ jobs:
       - name: Check out the shared substrate
         uses: actions/checkout@v5
         with:
-          repository: entro314-labs/cosmic-pim
+          repository: Magnetar-OS/cosmic-pim
           path: cosmic-pim-checkout
 
       - name: Place the substrate where Cargo.toml expects it

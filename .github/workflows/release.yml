@@ -62,7 +62,7 @@ jobs:
       tag: ${{ inputs.tag || '' }}
       product_name: 'slate'
       repo_name: 'entro314labs'
-      pages_repo: 'entro314-labs/arch-repo'
+      pages_repo: 'Magnetar-OS/arch-repo'
     secrets: inherit
 
   # AUR listing. Validates on every release; publishes only when the
@@ -76,7 +76,7 @@ jobs:
       pkgname: 'slate-bin'
       product_name: 'slate'
       pkgdesc: 'View and manage your events and tasks'
-      url: 'https://github.com/entro314-labs/slate'
+      url: 'https://github.com/Magnetar-OS/slate'
       license: 'GPL-3.0-only'
       depends: 'libxkbcommon openssl sqlite'
       provides: 'slate'

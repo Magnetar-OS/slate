@@ -1,11 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.entro314labs.Calendar</id>
+  <id>io.github.entro314labs.Slate</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
+  <!-- What marks this as part of the COSMIC set rather than a generic GTK app. -->
+  <project_group>COSMIC</project_group>
 
-  <name>Calendar</name>
-  <summary>View and manage your events</summary>
+  <name>Slate</name>
+  <summary>View and manage your events and tasks</summary>
+
+  <developer id="io.github.entro314labs">
+    <name>entro314 labs</name>
+  </developer>
+
+  <url type="homepage">https://github.com/entro314-labs/slate</url>
+  <url type="bugtracker">https://github.com/entro314-labs/slate/issues</url>
+  <url type="vcs-browser">https://github.com/entro314-labs/slate</url>
 
   <description>
     <p>
@@ -14,26 +24,107 @@
       khal, and any CalDAV server you point them at.
     </p>
     <ul>
-      <li>Month, week, and day views</li>
-      <li>Multiple calendars with per-calendar colors and visibility</li>
-      <li>Recurring events</li>
+      <li>Month, week, day, agenda, and year views</li>
+      <li>A task list backed by the same iCalendar files</li>
+      <li>Multiple calendars with per-calendar colors, visibility, and defaults</li>
+      <li>Recurring events, edited or deleted one occurrence at a time</li>
+      <li>Drag to move, resize, and create events</li>
+      <li>Per-event time zones, and a second time zone beside your own</li>
+      <li>Quick add: type "lunch with Maria Thu 13:00 at Kolonaki"</li>
+      <li>Search, undo, and redo</li>
+      <li>CalDAV accounts and read-only calendar subscriptions, synced in the background</li>
+      <li>Invitations, answered without leaving the calendar</li>
       <li>Picks up changes made by other tools on disk</li>
     </ul>
   </description>
 
-  <launchable type="desktop-id">io.github.entro314labs.Calendar.desktop</launchable>
+  <launchable type="desktop-id">io.github.entro314labs.Slate.desktop</launchable>
+
+  <!--
+    Flathub requires at least one screenshot, and they must be hosted, not
+    bundled. Capture these on a clean session — the shot includes whatever is
+    behind the window, so an ordinary desktop leaks window titles, code, and
+    addresses into a public listing — then commit them under
+    resources/screenshots/ and uncomment this block.
+
+    Wanted, in this order (the first is the one software centres show):
+      1. week.png    — the week view on a populated week
+      2. month.png   — the month view
+      3. editor.png  — an event open in the editor, showing the repeat scopes
+      4. agenda.png  — the agenda view
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/entro314-labs/slate/main/resources/screenshots/week.png</image>
+      <caption>The week view</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/entro314-labs/slate/main/resources/screenshots/month.png</image>
+      <caption>The month view</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/entro314-labs/slate/main/resources/screenshots/editor.png</image>
+      <caption>Editing one occurrence of a repeating event</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/entro314-labs/slate/main/resources/screenshots/agenda.png</image>
+      <caption>The agenda view</caption>
+    </screenshot>
+  </screenshots>
+  -->
+  <icon type="remote" width="64" height="64" scale="1">https://raw.githubusercontent.com/entro314-labs/slate/main/resources/icons/hicolor/scalable/apps/icon.svg</icon>
+
+  <!-- How the COSMIC App Library and store recognise a COSMIC application, and
+       which binary and file types this component actually provides. -->
+  <provides>
+    <id>com.system76.CosmicApplication</id>
+    <mediatype>text/calendar</mediatype>
+    <binary>slate</binary>
+  </provides>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </supports>
 
   <categories>
     <category>Office</category>
     <category>Calendar</category>
   </categories>
 
+  <keywords>
+    <keyword>calendar</keyword>
+    <keyword>event</keyword>
+    <keyword>schedule</keyword>
+    <keyword>agenda</keyword>
+    <keyword>task</keyword>
+  </keywords>
+
   <content_rating type="oars-1.1"/>
+
+  <!-- The blue of the app icon; software centres tint the page header with it. -->
+  <branding>
+    <color type="primary" scheme_preference="light">#2d7dd2</color>
+    <color type="primary" scheme_preference="dark">#1c5fa8</color>
+  </branding>
 
   <releases>
     <release version="0.1.0" date="2026-08-04">
       <description>
-        <p>Initial release.</p>
+        <p>The first release.</p>
+        <ul>
+          <li>Month, week, day, agenda, and year views, with a task list</li>
+          <li>Recurring events, with this-occurrence, this-and-following, and whole-series edits and deletes</li>
+          <li>Drag to move, resize, and create; per-event time zones</li>
+          <li>Quick add, search, and undo</li>
+          <li>CalDAV sync, calendar subscriptions, and conflict resolution</li>
+          <li>Invitations answered in place, reminders while the window is closed</li>
+        </ul>
       </description>
     </release>
   </releases>

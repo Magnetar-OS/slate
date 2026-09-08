@@ -1,14 +1,52 @@
 [package]
-name = "cosmic-calendar"
+name = "slate"
 version = "0.1.0"
 edition = "2024"
+# GPL-3.0-only applies to THIS package — the Slate application. The shared
+# substrate (cosmic-pim) is MPL-2.0 and is linked, not absorbed. See
+# LICENSING.md there for why the split exists and the one trap to avoid.
 license = "GPL-3.0-only"
-description = "A calendar for the COSMIC desktop"
-repository = "https://github.com/entro314-labs/cosmic-calendar"
-rust-version = "1.97.1"
+description = "Slate — a calendar and task list for the COSMIC desktop"
+repository = "https://github.com/entro314-labs/slate"
+rust-version = "1.98.0"
 
 [dependencies]
+# --- the shared PIM substrate (MPL-2.0), from its own repository ---
+# `model`, `store`, and `atomic` are re-exported from lib.rs, so in-app paths
+# stay `crate::model::…` / `crate::store::…`.
+#
+# PATHS FOR NOW, versions once cosmic-pim is published. A `git` dependency
+# cannot resolve against a repository that does not exist yet, and a `[patch]`
+# does not save you — cargo still fetches the patched source to resolve it.
+#
+# The licence gate is open: Meltemi grants MPL-2.0 (Exhibit A only) on each
+# donor file, naming these derivatives, in its own LICENSING.md. What is left
+# before these become version dependencies is mechanical — push cosmic-pim and
+# publish it. Swap to this once that is done:
+#
+#   cosmic-pim-core     = "0.1"
+#   cosmic-pim-accounts = "0.1"
+#   cosmic-pim-sync     = "0.1"
+#   cosmic-pim-caldav   = "0.1"
+#
+# …keeping a commented `[patch]` at the bottom of this file for local work.
+cosmic-pim-core = { path = "../cosmic-pim/crates/cosmic-pim-core" }
+# Accounts, credentials, and the CalDAV sync cycle. Used by the daemon (which
+# runs sync on a timer) and by the app's settings UI.
+cosmic-pim-accounts = { path = "../cosmic-pim/crates/cosmic-pim-accounts" }
+cosmic-pim-sync = { path = "../cosmic-pim/crates/cosmic-pim-sync" }
+# ICS feed subscriptions. Used directly by the daemon, which drives feed
+# refreshes on its sync tick — the account-based sync engine deliberately does
+# not schedule them, because a feed is a URL, not an account.
+cosmic-pim-caldav = { path = "../cosmic-pim/crates/cosmic-pim-caldav" }
+
 # --- COSMIC / UI ---
+# Animated sidebar collapse and the icon-only rail — neither exists in
+# libcosmic. Path for now, git tag once pushed — a tag rather than a version,
+# because this crate depends on libcosmic, libcosmic is not on crates.io, and
+# crates.io refuses any crate carrying a git dependency. That is not a state we
+# can fix from here; it stays a git dependency until pop-os publishes.
+cosmic-ext-widgets = { path = "../cosmic-ext-widgets" }
 i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
 i18n-embed-fl = "0.10"
 rust-embed = "8.12"
@@ -16,54 +54,46 @@ open = "5.4"
 tokio = { version = "1.53", features = ["full"] }
 
 # --- time ---
-# chrono is the domain time type: both `icalendar` and `rrule` are built on it.
+# chrono is the domain time type the model speaks.
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 chrono-tz = "0.10.4"
 # jiff appears only at the libcosmic boundary — `widget::calendar` speaks
 # `jiff::civil::Date`. Kept in lockstep with the version libcosmic resolves.
 jiff = "0.2.35"
 
-# --- iCalendar / recurrence ---
-icalendar = { version = "0.17.13", features = ["parser", "chrono-tz", "recurrence"] }
-rrule = "0.14"
-
-# --- storage ---
-# `bundled` compiles SQLite from source so we never depend on the host's
-# libsqlite3 version. Costs ~15s of build time, buys reproducibility.
-rusqlite = { version = "0.40", features = ["bundled", "chrono"] }
-notify = "8.2"
+# iCalendar parsing, recurrence expansion, SQLite, and directory watching all
+# moved to cosmic-pim-core with the storage layer; the app reaches them through
+# the re-exported `crate::store` and no longer links them directly.
 
 # --- misc ---
-uuid = { version = "1.24", features = ["v4"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-dirs = "6"
 serde = { version = "1.0.229", features = ["derive"] }
 notify-rust = { version = "4.18", default-features = false, features = ["z"] }
 # Already in the tree via notify-rust's zbus backend. Used directly so the app and
 # the reminder daemon can agree on which of them owns notifications.
-zbus = "5.18"
+zbus = "5.19"
 # pop-launcher speaks newline-delimited JSON on stdin/stdout.
 serde_json = "1"
 url = "2.5"
 
 [[bin]]
-name = "cosmic-calendar"
+name = "slate"
 path = "src/main.rs"
 
 [[bin]]
-name = "cosmic-calendar-applet"
+name = "slate-applet"
 path = "src/bin/applet.rs"
 
 [[bin]]
 # Fires reminders with the window closed. Started by a systemd user unit.
-name = "cosmic-calendar-daemon"
+name = "slate-daemon"
 path = "src/bin/daemon.rs"
 
 [[bin]]
 # pop-launcher plugin: searching events from the COSMIC launcher.
-name = "cosmic-calendar-launcher"
+name = "slate-launcher"
 path = "src/bin/launcher.rs"
 
 
@@ -79,12 +109,30 @@ features = [
     "wgpu",
     # xdg portal dialogs on Linux
     "xdg-portal",
-    # Panel applet support, for the cosmic-calendar-applet binary.
+    # Panel applet support, for the slate-applet binary.
     "applet",
+    # XDG activation tokens, so a window opened from the applet is allowed to
+    # take focus instead of being flagged as demanding attention.
+    "applet-token",
+    # `cosmic::desktop::spawn_desktop_exec` — the canonical launch path: a
+    # double fork with setsid underneath, plus a systemd transient scope
+    # (app-cosmic-<id>-<pid>.scope) so the window the applet and the launcher
+    # plugin open belongs to the session, not to whatever opened it.
+    "desktop-systemd-scope",
 ]
 
-[dev-dependencies]
-tempfile = "3"
+# Once the substrate is published, uncomment this to develop against the
+# sibling checkout without cutting a release on every change. The key is
+# `crates-io` because that is where those crates will resolve from; the widget
+# crate stays a git dependency, so it is patched by URL instead.
+# [patch.crates-io]
+# cosmic-pim-core = { path = "../cosmic-pim/crates/cosmic-pim-core" }
+# cosmic-pim-accounts = { path = "../cosmic-pim/crates/cosmic-pim-accounts" }
+# cosmic-pim-sync = { path = "../cosmic-pim/crates/cosmic-pim-sync" }
+# cosmic-pim-caldav = { path = "../cosmic-pim/crates/cosmic-pim-caldav" }
+#
+# [patch.'https://github.com/entro314-labs/cosmic-ext-widgets']
+# cosmic-ext-widgets = { path = "../cosmic-ext-widgets" }
 
 # Uncomment to test against a locally-cloned libcosmic
 # [patch.'https://github.com/pop-os/libcosmic']

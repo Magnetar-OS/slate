@@ -2,10 +2,16 @@
 
 //! View code, and the small vocabulary the views share.
 
+pub mod accounts;
+pub mod agenda;
 pub mod editor;
 pub mod month;
+pub mod search;
 pub mod sidebar;
+pub mod task_editor;
+pub mod tasks;
 pub mod timegrid;
+pub mod year;
 
 use crate::config::Config;
 use crate::fl;
@@ -25,6 +31,10 @@ pub const MIN_BLOCK_HEIGHT: f32 = 18.0;
 
 /// Diameter of the accent badge drawn behind today's date.
 pub const TODAY_BADGE: f32 = 26.0;
+
+/// Padding inside an activatable list row, so the focus ring has room to sit
+/// clear of the text.
+pub const ROW_PADDING: u16 = 2;
 
 /// Most events a month cell shows before collapsing into "+N more".
 pub const MAX_CHIPS_PER_DAY: usize = 3;
@@ -146,6 +156,72 @@ pub fn today_badge() -> cosmic::theme::Container<'static> {
     })
 }
 
+/// The translucent target a drag paints where the event will land.
+#[must_use]
+pub fn ghost_chip() -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(|theme| {
+        let cosmic = theme.cosmic();
+        let mut fill: Color = cosmic.accent_color().into();
+        fill.a = 0.25;
+        cosmic::iced::widget::container::Style {
+            background: Some(cosmic::iced::Background::Color(fill)),
+            border: cosmic::iced::Border {
+                radius: cosmic.corner_radii.radius_xs.into(),
+                width: 1.0,
+                color: cosmic.accent_color().into(),
+            },
+            ..Default::default()
+        }
+    })
+}
+
+/// The tint behind hours outside 09:00–18:00 in the time grid, so working
+/// hours read as the bright band without a single line of chrome.
+#[must_use]
+pub fn off_hours_shade() -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(|theme| {
+        let mut shade: Color = theme.cosmic().primary(theme.transparent).on.into();
+        shade.a = 0.035;
+        cosmic::iced::widget::container::Style {
+            background: Some(cosmic::iced::Background::Color(shade)),
+            ..Default::default()
+        }
+    })
+}
+
+/// A day square in the year view, tinted by how busy the day is.
+///
+/// `level` is 0 (nothing) to 3 (busiest). The accent carries the scale rather
+/// than a separate heat palette, so the view stays in the desktop's own colour
+/// and a themed accent takes the heatmap with it.
+#[must_use]
+pub fn heat_cell(level: usize) -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(move |theme| {
+        let cosmic = theme.cosmic();
+        let background = match level {
+            0 => None,
+            n => {
+                let mut tint: Color = cosmic.accent_color().into();
+                // Four steps, far enough apart to be told apart at 22px.
+                tint.a = match n {
+                    1 => 0.16,
+                    2 => 0.34,
+                    _ => 0.55,
+                };
+                Some(cosmic::iced::Background::Color(tint))
+            }
+        };
+        cosmic::iced::widget::container::Style {
+            background,
+            border: cosmic::iced::Border {
+                radius: cosmic.corner_radii.radius_xs.into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    })
+}
+
 /// A solid bar of the calendar's colour, used as an event's leading accent.
 #[must_use]
 pub fn color_bar(rgb: Rgb) -> cosmic::theme::Container<'static> {
@@ -240,6 +316,36 @@ fn chip_style(rgb: Rgb, theme: &cosmic::Theme, alpha: f32) -> cosmic::widget::bu
         outline_width: 0.0,
         outline_color: Color::TRANSPARENT,
         ..Default::default()
+    }
+}
+
+/// A whole row made activatable, without repainting what is inside it.
+///
+/// The list views need their rows to be reachable by keyboard — a `mouse_area`
+/// takes a click but cannot take focus — while a stock button would impose its
+/// own text colour on every label in the row, flattening the dimmed captions
+/// and the overdue red. This keeps the button's focus ring and hover feedback
+/// and leaves `text_color` unset, so each child keeps the class it chose.
+#[must_use]
+pub fn row_button() -> cosmic::theme::Button {
+    fn style(theme: &cosmic::Theme, alpha: f32) -> cosmic::widget::button::Style {
+        let cosmic = theme.cosmic();
+        let mut fill: Color = cosmic.primary(theme.transparent).on.into();
+        fill.a = alpha;
+        cosmic::widget::button::Style {
+            background: (alpha > 0.0).then_some(cosmic::iced::Background::Color(fill)),
+            border_radius: cosmic.corner_radii.radius_xs.into(),
+            // Deliberately not set: the row's own children carry their colours.
+            text_color: None,
+            ..Default::default()
+        }
+    }
+
+    cosmic::theme::Button::Custom {
+        active: Box::new(|_focused, theme| style(theme, 0.0)),
+        disabled: Box::new(|theme| style(theme, 0.0)),
+        hovered: Box::new(|_focused, theme| style(theme, 0.06)),
+        pressed: Box::new(|_focused, theme| style(theme, 0.10)),
     }
 }
 
@@ -354,6 +460,17 @@ pub fn range_title(view: crate::config::ViewKind, anchor: NaiveDate, config: &Co
             format_date_short(anchor),
             anchor.year()
         ),
+        ViewKind::Agenda => {
+            let end = anchor + Duration::days(ViewKind::AGENDA_DAYS - 1);
+            format!(
+                "{} – {} {}",
+                format_date_short(anchor),
+                format_date_short(end),
+                end.year()
+            )
+        }
+        ViewKind::Year => anchor.year().to_string(),
+        ViewKind::Tasks => fl!("tasks"),
     }
 }
 
@@ -387,7 +504,18 @@ pub fn visible_range(
             let start = week_start(anchor, config.first_weekday());
             (start, start + Duration::days(7))
         }
-        ViewKind::Day => (anchor, anchor + Duration::days(1)),
+        ViewKind::Agenda => (anchor, anchor + Duration::days(ViewKind::AGENDA_DAYS)),
+        // The whole calendar year, plus the leading and trailing days the mini
+        // months' week rows reach into.
+        ViewKind::Year => {
+            let first = NaiveDate::from_ymd_opt(anchor.year(), 1, 1).unwrap_or(anchor);
+            let last = NaiveDate::from_ymd_opt(anchor.year(), 12, 31).unwrap_or(anchor);
+            (
+                week_start(first, config.first_weekday()),
+                week_start(last, config.first_weekday()) + Duration::days(7),
+            )
+        }
+        ViewKind::Day | ViewKind::Tasks => (anchor, anchor + Duration::days(1)),
     }
 }
 
@@ -415,6 +543,26 @@ mod tests {
 
     fn day(y: i32, m: u32, d: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn the_year_range_covers_every_day_of_the_year() {
+        let config = Config::default();
+        let (from, to) = visible_range(crate::config::ViewKind::Year, day(2026, 6, 15), &config);
+
+        // Every mini month's grid is drawn from a week boundary, so the range
+        // has to start on one and reach past 31 December.
+        assert_eq!(from.weekday(), config.first_weekday());
+        assert!(from <= day(2026, 1, 1), "January is not covered: {from}");
+        assert!(to > day(2026, 12, 31), "December is not covered: {to}");
+    }
+
+    #[test]
+    fn the_year_range_follows_the_anchor_year() {
+        let config = Config::default();
+        let (from, to) = visible_range(crate::config::ViewKind::Year, day(2027, 3, 2), &config);
+        assert!(from <= day(2027, 1, 1) && to > day(2027, 12, 31));
+        assert!(from > day(2026, 12, 1), "leaked into the previous year");
     }
 
     #[test]

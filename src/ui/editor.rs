@@ -21,11 +21,25 @@ pub enum DateField {
     Until,
 }
 
+/// Which zone the timezone picker is choosing for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TzField {
+    Start,
+    /// The end's own zone — the flight case, where an event starts in one
+    /// zone and ends in another.
+    End,
+}
+
 /// Editor state. Kept as strings where the user types, so a half-typed time does
 /// not have to round-trip through a parser on every keystroke.
 pub struct Editor {
     /// `None` when creating; `Some` carries the file name and UID we must keep.
     pub original: Option<Event>,
+    /// Set when the editor was opened from one *generated* instance of a
+    /// series (not an override): the identity of that instance, which is what
+    /// a "this event" edit or delete acts on. The scope prompt exists exactly
+    /// when this does.
+    pub occurrence: Option<chrono::DateTime<chrono::Utc>>,
     pub calendar_id: String,
     pub summary: String,
     pub location: String,
@@ -43,17 +57,56 @@ pub struct Editor {
     /// Set when the event carries an `RRULE` the simple editor cannot represent.
     /// The rule is preserved on save rather than being flattened.
     pub custom_rrule: Option<String>,
+    /// Explicit start zone; `None` means the system zone. The date and time
+    /// fields show wall clock in this zone, which is what "09:00 in Tokyo"
+    /// means whichever zone the viewer is in.
+    pub start_tz: Option<Tz>,
+    /// Explicit end zone when it differs from the start's — the flight case.
+    /// `None` means "same zone as the start".
+    pub end_tz: Option<Tz>,
+    /// Which zone field the timezone picker is open for, if any.
+    pub tz_picking: Option<TzField>,
+    /// Live search text in the timezone picker.
+    pub tz_query: String,
     pub picker: widget::calendar::CalendarModel,
     pub picking: Option<DateField>,
     pub error: Option<String>,
 }
 
+/// The zone an [`EventTime`] carries explicitly, when it is worth showing.
+///
+/// The system zone and UTC stamps resolve to `None`: both display and save as
+/// "the viewer's time", which is also what every event this editor creates
+/// starts as. Only a genuinely foreign `TZID` is an explicit choice to keep.
+fn explicit_zone(time: EventTime, local: Tz) -> Option<Tz> {
+    match time {
+        EventTime::Zoned(_, tz) if tz != local && tz != chrono_tz::UTC => Some(tz),
+        _ => None,
+    }
+}
+
+/// Wall clock of `time` in `zone`. All-day and floating values are already
+/// wall clock; zoned ones convert through their instant.
+fn wall_in(time: EventTime, zone: Tz, local: Tz) -> NaiveDateTime {
+    match time {
+        EventTime::Date(_) | EventTime::Floating(_) => time.naive_local(local),
+        EventTime::Zoned(..) => time.to_utc(local).with_timezone(&zone).naive_local(),
+    }
+}
+
 impl Editor {
-    /// A blank event at `start`.
+    /// A blank event at `start`, lasting `duration` — which the calendar it
+    /// lands in may have its own opinion about.
     #[must_use]
-    pub fn new(calendar_id: String, start: NaiveDateTime, all_day: bool) -> Self {
-        let end = start + chrono::Duration::hours(1);
+    pub fn new(
+        calendar_id: String,
+        start: NaiveDateTime,
+        all_day: bool,
+        duration: chrono::Duration,
+    ) -> Self {
+        let end = start + duration;
         Self {
+            occurrence: None,
             original: None,
             calendar_id,
             summary: String::new(),
@@ -70,17 +123,64 @@ impl Editor {
             count: "10".into(),
             until: start.date() + chrono::Duration::days(30),
             custom_rrule: None,
+            start_tz: None,
+            end_tz: None,
+            tz_picking: None,
+            tz_query: String::new(),
             picker: to_picker(start.date()),
             picking: None,
             error: None,
         }
     }
 
+    /// Opens one generated instance of a series: the fields show the
+    /// instance's own dates and times, not the series' first ones, and the
+    /// instance identity is kept so saving can ask "this event or all events?".
+    #[must_use]
+    pub fn from_series_occurrence(
+        master: &Event,
+        instant: chrono::DateTime<chrono::Utc>,
+        local: Tz,
+    ) -> Self {
+        let mut editor = Self::from_event(master, local);
+        editor.occurrence = Some(instant);
+
+        // Place the instance in the zone the fields display in — the series'
+        // own zone for a foreign-zone master, the viewer's otherwise (which is
+        // also where floating and all-day instants were resolved).
+        let start_zone = editor.start_tz.unwrap_or(local);
+        let end_zone = editor.end_tz.unwrap_or(start_zone);
+        let start = instant.with_timezone(&start_zone).naive_local();
+        let duration = master.duration(local);
+        let end = (instant + duration).with_timezone(&end_zone).naive_local();
+
+        editor.start_date = start.date();
+        editor.start_time = format!("{:02}:{:02}", start.hour(), start.minute());
+        editor.end_date = if editor.all_day {
+            // DTEND is exclusive; show the last covered day.
+            end.date() - chrono::Duration::days(1)
+        } else {
+            end.date()
+        };
+        editor.end_time = format!("{:02}:{:02}", end.hour(), end.minute());
+        editor
+    }
+
     /// Loads an existing event for editing.
     #[must_use]
     pub fn from_event(event: &Event, local: Tz) -> Self {
-        let start = event.start.naive_local(local);
-        let end = event.end.naive_local(local);
+        // A foreign TZID is kept and displayed in its own zone — "09:00 in
+        // Tokyo" shows 09:00 — rather than being flattened to the viewer's.
+        let start_tz = explicit_zone(event.start, local);
+        let start_zone = start_tz.unwrap_or(local);
+        let end_zone_actual = match event.end {
+            EventTime::Zoned(_, tz) if tz != chrono_tz::UTC => tz,
+            _ => local,
+        };
+        let end_tz = (end_zone_actual != start_zone).then_some(end_zone_actual);
+
+        let start = wall_in(event.start, start_zone, local);
+        let end = wall_in(event.end, end_tz.unwrap_or(start_zone), local);
 
         // The editor understands a subset of RRULE. Anything richer is kept
         // verbatim in `custom_rrule` and written back untouched.
@@ -100,6 +200,7 @@ impl Editor {
         };
 
         Self {
+            occurrence: None,
             calendar_id: event.calendar_id.clone(),
             summary: event.summary.clone(),
             location: event.location.clone().unwrap_or_default(),
@@ -126,6 +227,10 @@ impl Editor {
             },
             repeat_end,
             custom_rrule: custom,
+            start_tz,
+            end_tz,
+            tz_picking: None,
+            tz_query: String::new(),
             picker: to_picker(start.date()),
             picking: None,
             error: None,
@@ -155,25 +260,35 @@ impl Editor {
             let end_time =
                 parse_time(&self.end_time).ok_or_else(|| fl!("error-invalid-time-range"))?;
 
-            let start = self.start_date.and_time(start_time);
-            let end = self.end_date.and_time(end_time);
+            let start_zone = self.start_tz.unwrap_or(local);
+            let end_zone = self.end_tz.unwrap_or(start_zone);
+            let start = EventTime::Zoned(self.start_date.and_time(start_time), start_zone);
+            let end = EventTime::Zoned(self.end_date.and_time(end_time), end_zone);
 
-            if end <= start {
+            // Compared as instants, not wall clocks: a flight can land at an
+            // earlier wall-clock time than it took off.
+            if end.to_utc(local) <= start.to_utc(local) {
                 return Err(fl!("error-invalid-time-range"));
             }
 
-            (EventTime::Zoned(start, local), EventTime::Zoned(end, local))
+            (start, end)
         };
 
-        let rrule = match &self.custom_rrule {
-            // Never rewrite a rule we could not fully parse.
-            Some(raw) => Some(raw.clone()),
-            None => Recurrence {
-                freq: self.freq,
-                interval: self.interval.parse().unwrap_or(1).max(1),
-                end: self.resolved_repeat_end(),
+        let rrule = if self.is_override() {
+            // An override describes one instance of somebody else's series; a
+            // rule on it would fork a second series under the same UID.
+            None
+        } else {
+            match &self.custom_rrule {
+                // Never rewrite a rule we could not fully parse.
+                Some(raw) => Some(raw.clone()),
+                None => Recurrence {
+                    freq: self.freq,
+                    interval: self.interval.parse().unwrap_or(1).max(1),
+                    end: self.resolved_repeat_end(),
+                }
+                .to_rrule(),
             }
-            .to_rrule(),
         };
 
         let mut event = match &self.original {
@@ -243,8 +358,12 @@ impl Editor {
     }
 
     fn details_section<'a>(&'a self, calendars: &'a [CalendarMeta]) -> Element<'a, Message> {
-        let names: Vec<String> = calendars.iter().map(|c| c.name.clone()).collect();
-        let selected = calendars.iter().position(|c| c.id == self.calendar_id);
+        // Read-only calendars (ICS feeds, unwritable directories) are not
+        // valid destinations; the index space here must match the handler's,
+        // which filters the same way.
+        let writable: Vec<&CalendarMeta> = calendars.iter().filter(|c| !c.read_only).collect();
+        let names: Vec<String> = writable.iter().map(|c| c.name.clone()).collect();
+        let selected = writable.iter().position(|c| c.id == self.calendar_id);
 
         widget::settings::section()
             .add(
@@ -306,7 +425,85 @@ impl Editor {
             section = section.add(self.picker_row(field));
         }
 
+        // Timezone rows: meaningless for all-day events, which are dates and
+        // never shift.
+        if !self.all_day {
+            section = section.add(
+                widget::settings::item::builder(fl!("time-zone")).control(
+                    widget::button::standard(zone_label(self.start_tz))
+                        .on_press(Message::EditorTzToggle(TzField::Start)),
+                ),
+            );
+
+            // The end's own zone appears only once it exists (or is being
+            // chosen) — the flight case is rare and should not cost everyone
+            // else a row.
+            if self.end_tz.is_some() || self.tz_picking == Some(TzField::End) {
+                section =
+                    section.add(
+                        widget::settings::item::builder(fl!("time-zone-ends-in")).control(
+                            widget::button::standard(self.end_tz.map_or_else(
+                                || fl!("time-zone-same-as-start"),
+                                |tz| tz.to_string(),
+                            ))
+                            .on_press(Message::EditorTzToggle(TzField::End)),
+                        ),
+                    );
+            }
+
+            if let Some(field) = self.tz_picking {
+                section = section.add(self.tz_picker(field));
+            }
+        }
+
         section.into()
+    }
+
+    /// The timezone picker: a search box over the IANA names, the first few
+    /// matches as buttons, and the way back to the default.
+    fn tz_picker(&self, field: TzField) -> Element<'_, Message> {
+        let spacing = cosmic::theme::spacing();
+
+        let mut column = widget::column::with_capacity(4)
+            .spacing(spacing.space_xxs)
+            .push(
+                widget::text_input(fl!("time-zone-search-hint"), &self.tz_query)
+                    .on_input(Message::EditorTzQuery),
+            );
+
+        if !self.tz_query.trim().is_empty() {
+            let query = self.tz_query.trim().to_ascii_lowercase();
+            let mut matches = chrono_tz::TZ_VARIANTS
+                .iter()
+                .filter(|tz| tz.name().to_ascii_lowercase().contains(&query))
+                .take(6)
+                .peekable();
+
+            if matches.peek().is_none() {
+                column = column.push(widget::text::caption(fl!("time-zone-no-match")));
+            }
+            for tz in matches {
+                column = column.push(
+                    widget::button::text(tz.name().to_owned())
+                        .on_press(Message::EditorTzChosen(tz.name().to_owned())),
+                );
+            }
+        }
+
+        let clear_label = match field {
+            TzField::Start => fl!("time-zone-system"),
+            TzField::End => fl!("time-zone-same-as-start"),
+        };
+        column = column.push(widget::button::text(clear_label).on_press(Message::EditorTzClear));
+
+        if field == TzField::Start && self.end_tz.is_none() {
+            column = column.push(
+                widget::button::text(fl!("time-zone-different-end"))
+                    .on_press(Message::EditorTzToggle(TzField::End)),
+            );
+        }
+
+        widget::container(column).padding(spacing.space_xxs).into()
     }
 
     fn date_control<'a>(
@@ -357,8 +554,28 @@ impl Editor {
         .into()
     }
 
+    /// Whether the editor is open on a `RECURRENCE-ID` override — a single
+    /// modified instance of a series, rather than the series itself.
+    #[must_use]
+    pub fn is_override(&self) -> bool {
+        self.original
+            .as_ref()
+            .is_some_and(|event| event.recurrence_id.is_some())
+    }
+
     fn repeat_section(&self) -> Element<'_, Message> {
         let spacing = cosmic::theme::spacing();
+
+        // One instance of a series: the recurrence belongs to the master, so
+        // showing dropdowns here would offer an edit that cannot mean anything.
+        if self.is_override() {
+            return widget::settings::section()
+                .add(
+                    widget::settings::item::builder(fl!("repeats"))
+                        .control(widget::text::caption(fl!("modified-occurrence"))),
+                )
+                .into();
+        }
 
         // An RRULE we cannot express is shown read-only rather than silently
         // replaced by whatever the dropdowns happen to say.
@@ -438,10 +655,17 @@ impl Editor {
     fn actions(&self) -> Element<'_, Message> {
         let spacing = cosmic::theme::spacing();
 
-        let mut row = widget::row::with_capacity(3)
+        let mut row = widget::row::with_capacity(4)
             .spacing(spacing.space_xxs)
             .push(widget::button::suggested(fl!("save")).on_press(Message::EditorSave))
             .push(widget::button::standard(fl!("cancel")).on_press(Message::EditorCancel));
+
+        if let Some(url) =
+            crate::meeting::meeting_link(Some(&self.location), Some(&self.description))
+        {
+            row =
+                row.push(widget::button::text(fl!("join-call")).on_press(Message::LaunchUrl(url)));
+        }
 
         if !self.is_new() {
             row = row
@@ -451,6 +675,11 @@ impl Editor {
 
         row.width(Length::Fill).into()
     }
+}
+
+/// The label on the timezone button: the zone's IANA name, or the default.
+fn zone_label(tz: Option<Tz>) -> String {
+    tz.map_or_else(|| fl!("time-zone-system"), |tz| tz.to_string())
 }
 
 fn freq_label(freq: Freq) -> String {
@@ -587,6 +816,7 @@ mod tests {
                 .and_hms_opt(9, 0, 0)
                 .unwrap(),
             false,
+            chrono::Duration::hours(1),
         );
         assert!(editor.to_event(chrono_tz::UTC).is_err());
     }
@@ -600,6 +830,7 @@ mod tests {
                 .and_hms_opt(9, 0, 0)
                 .unwrap(),
             false,
+            chrono::Duration::hours(1),
         );
         editor.summary = "Standup".into();
         editor.end_time = "08:00".into();
@@ -615,6 +846,7 @@ mod tests {
                 .and_hms_opt(0, 0, 0)
                 .unwrap(),
             true,
+            chrono::Duration::hours(1),
         );
         editor.summary = "Conference".into();
         editor.start_date = NaiveDate::from_ymd_opt(2026, 8, 4).unwrap();
@@ -696,6 +928,155 @@ mod tests {
 
         let editor = Editor::from_event(&event, chrono_tz::UTC);
         assert_eq!(editor.to_event(chrono_tz::UTC).unwrap().sequence, 4);
+    }
+
+    #[test]
+    fn opening_a_series_instance_shows_its_own_dates() {
+        let mut master = Event::draft(
+            "personal",
+            NaiveDate::from_ymd_opt(2026, 8, 4)
+                .unwrap()
+                .and_hms_opt(9, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        );
+        master.summary = "Standup".into();
+        master.rrule = Some("FREQ=WEEKLY".into());
+
+        // The user clicked the 18 Aug instance.
+        let instant = NaiveDate::from_ymd_opt(2026, 8, 18)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap()
+            .and_utc();
+        let editor = Editor::from_series_occurrence(&master, instant, chrono_tz::UTC);
+
+        assert_eq!(
+            editor.start_date,
+            NaiveDate::from_ymd_opt(2026, 8, 18).unwrap(),
+            "the editor must show the clicked instance, not the series start"
+        );
+        assert_eq!(editor.start_time, "09:00");
+        assert_eq!(editor.occurrence, Some(instant));
+
+        // And what it builds carries the instance's dates — which is exactly
+        // what a "this event" save turns into an override.
+        let event = editor.to_event(chrono_tz::UTC).unwrap();
+        assert_eq!(
+            event.start.naive_local(chrono_tz::UTC).date(),
+            NaiveDate::from_ymd_opt(2026, 8, 18).unwrap()
+        );
+        assert_eq!(event.uid, master.uid, "identity is the master's");
+    }
+
+    #[test]
+    fn an_override_never_grows_a_rule() {
+        let mut over = Event::draft(
+            "personal",
+            NaiveDate::from_ymd_opt(2026, 8, 18)
+                .unwrap()
+                .and_hms_opt(14, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        );
+        over.summary = "Moved".into();
+        over.recurrence_id = Some(crate::model::EventTime::Zoned(
+            NaiveDate::from_ymd_opt(2026, 8, 18)
+                .unwrap()
+                .and_hms_opt(9, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        ));
+
+        let mut editor = Editor::from_event(&over, chrono_tz::UTC);
+        assert!(editor.is_override());
+
+        // Even if the recurrence state somehow says "weekly", the built event
+        // must not carry a rule: a rule on an override forks the series.
+        editor.freq = Freq::Weekly;
+        let event = editor.to_event(chrono_tz::UTC).unwrap();
+        assert_eq!(event.rrule, None);
+        assert!(event.recurrence_id.is_some());
+    }
+
+    #[test]
+    fn a_foreign_zone_is_preserved_and_shown_in_its_own_wall_clock() {
+        let athens = chrono_tz::Europe::Athens;
+        let tokyo = chrono_tz::Asia::Tokyo;
+        let nine = NaiveDate::from_ymd_opt(2026, 8, 4)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap();
+
+        let mut event = Event::draft("personal", nine, athens);
+        event.summary = "Tokyo call".into();
+        event.start = EventTime::Zoned(nine, tokyo);
+        event.end = EventTime::Zoned(nine + chrono::Duration::hours(1), tokyo);
+
+        let editor = Editor::from_event(&event, athens);
+        assert_eq!(editor.start_tz, Some(tokyo));
+        assert_eq!(editor.end_tz, None, "same zone at both ends");
+        assert_eq!(
+            editor.start_time, "09:00",
+            "displayed in the event's own zone, not flattened to the viewer's"
+        );
+
+        let saved = editor.to_event(athens).unwrap();
+        assert_eq!(saved.start, EventTime::Zoned(nine, tokyo));
+        assert_eq!(
+            saved.end,
+            EventTime::Zoned(nine + chrono::Duration::hours(1), tokyo)
+        );
+    }
+
+    #[test]
+    fn the_flight_case_keeps_two_zones_and_validates_by_instant() {
+        let athens = chrono_tz::Europe::Athens;
+        let los_angeles = chrono_tz::America::Los_Angeles;
+
+        let mut editor = Editor::new(
+            "personal".into(),
+            NaiveDate::from_ymd_opt(2026, 8, 4)
+                .unwrap()
+                .and_hms_opt(10, 0, 0)
+                .unwrap(),
+            false,
+            chrono::Duration::hours(1),
+        );
+        editor.summary = "ATH → LAX".into();
+        editor.start_tz = Some(athens);
+        editor.end_tz = Some(los_angeles);
+        editor.start_time = "10:00".into();
+        editor.end_time = "13:00".into();
+
+        // Lands the same calendar day at an earlier-looking hour difference —
+        // valid, because the instants are 16 hours apart.
+        let event = editor.to_event(athens).unwrap();
+        assert!(matches!(event.start, EventTime::Zoned(_, tz) if tz == athens));
+        assert!(matches!(event.end, EventTime::Zoned(_, tz) if tz == los_angeles));
+
+        // 00:00 in Los Angeles is 07:00Z — the same instant as the 10:00
+        // Athens departure, so it must be rejected as not-after.
+        editor.end_time = "00:00".into();
+        assert!(editor.to_event(athens).is_err());
+    }
+
+    #[test]
+    fn a_utc_stamped_event_still_edits_as_local_time() {
+        let athens = chrono_tz::Europe::Athens; // +03:00 in August
+        let six_utc = NaiveDate::from_ymd_opt(2026, 8, 4)
+            .unwrap()
+            .and_hms_opt(6, 0, 0)
+            .unwrap();
+
+        let mut event = Event::draft("personal", six_utc, athens);
+        event.summary = "Imported".into();
+        event.start = EventTime::Zoned(six_utc, chrono_tz::UTC);
+        event.end = EventTime::Zoned(six_utc + chrono::Duration::hours(1), chrono_tz::UTC);
+
+        let editor = Editor::from_event(&event, athens);
+        assert_eq!(editor.start_tz, None, "a UTC stamp is not a zone choice");
+        assert_eq!(editor.start_time, "09:00", "shown as local wall clock");
     }
 
     #[test]

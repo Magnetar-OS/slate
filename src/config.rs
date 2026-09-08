@@ -13,10 +13,36 @@ pub enum ViewKind {
     Month,
     Week,
     Day,
+    /// A flat list of the next month of events — the applet's model, with a
+    /// full window's worth of room.
+    Agenda,
+    /// Twelve mini months, each day tinted by how busy it is. Answers "when am
+    /// I busy" rather than "what is on".
+    Year,
+    /// The task list. Unlike the others this is not a date range — it is
+    /// every VTODO in every visible collection — so the paging controls and
+    /// the range title do not apply to it.
+    Tasks,
 }
 
 impl ViewKind {
-    pub const ALL: &'static [ViewKind] = &[ViewKind::Month, ViewKind::Week, ViewKind::Day];
+    pub const ALL: &'static [ViewKind] = &[
+        ViewKind::Month,
+        ViewKind::Week,
+        ViewKind::Day,
+        ViewKind::Agenda,
+        ViewKind::Year,
+        ViewKind::Tasks,
+    ];
+
+    /// Days the agenda view lists from its anchor.
+    pub const AGENDA_DAYS: i64 = 30;
+
+    /// Whether this view is anchored to a date range the user can page through.
+    #[must_use]
+    pub fn is_dated(self) -> bool {
+        !matches!(self, ViewKind::Tasks)
+    }
 
     /// How many days this view steps by when paging forward or back.
     #[must_use]
@@ -26,8 +52,30 @@ impl ViewKind {
             ViewKind::Month => 0,
             ViewKind::Week => 7,
             ViewKind::Day => 1,
+            ViewKind::Agenda => Self::AGENDA_DAYS,
+            // Years are not a fixed number of days either; handled with month.
+            ViewKind::Year => 0,
+            // Never paged.
+            ViewKind::Tasks => 0,
         }
     }
+}
+
+/// Per-calendar overrides of the two app-wide defaults.
+///
+/// Kept in this app's own config rather than in the collection directory: a
+/// vdir holds what every client agrees on, and neither of these is a thing
+/// khal or Thunderbird would know how to read. A calendar with no entry here
+/// simply uses the app-wide values.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CalendarDefaults {
+    pub calendar_id: String,
+    /// Minutes before the event to remind. `0` means "use the app-wide
+    /// setting", which is itself `0` for "no reminder".
+    pub reminder_minutes: u32,
+    /// How long a new event in this calendar lasts, in minutes. `0` means the
+    /// usual hour.
+    pub duration_minutes: u32,
 }
 
 #[derive(Clone, Debug, CosmicConfigEntry, Eq, PartialEq)]
@@ -45,6 +93,17 @@ pub struct Config {
     /// Minutes before an event to remind, for events that carry no `VALARM` of
     /// their own. `0` means no default reminder.
     pub default_reminder_minutes: u32,
+    /// A second hour gutter in the week/day grids, as an IANA zone name.
+    /// Empty means off. Stored as text rather than a `Tz` so a zone this
+    /// build's tzdb does not know cannot corrupt the config.
+    pub secondary_timezone: String,
+    /// Grid drag operations round to this many minutes: 5, 10, or 15.
+    pub snap_minutes: u8,
+    /// Birthdays from the suite's address books, shown as all-day entries.
+    pub show_birthdays: bool,
+    /// Per-calendar overrides; calendars absent from this list use the
+    /// app-wide defaults.
+    pub calendar_defaults: Vec<CalendarDefaults>,
 }
 
 impl Default for Config {
@@ -60,6 +119,12 @@ impl Default for Config {
             // Off by default: an app that starts notifying about every event
             // without being asked is an app people uninstall.
             default_reminder_minutes: 0,
+            secondary_timezone: String::new(),
+            snap_minutes: 15,
+            // On by default: the address book already knows them, and an
+            // empty book costs nothing.
+            show_birthdays: true,
+            calendar_defaults: Vec::new(),
         }
     }
 }
@@ -94,6 +159,21 @@ impl Config {
         }
     }
 
+    /// The secondary-gutter zone, when one is set and resolvable.
+    #[must_use]
+    pub fn secondary_tz(&self) -> Option<chrono_tz::Tz> {
+        self.secondary_timezone.trim().parse().ok()
+    }
+
+    /// The drag snap step, guarded against a hand-edited config saying `0`.
+    #[must_use]
+    pub fn snap(&self) -> i64 {
+        match self.snap_minutes {
+            5 | 10 => i64::from(self.snap_minutes),
+            _ => 15,
+        }
+    }
+
     #[must_use]
     pub fn is_hidden(&self, calendar_id: &str) -> bool {
         self.hidden_calendars.iter().any(|c| c == calendar_id)
@@ -112,6 +192,51 @@ impl Config {
     pub fn default_reminder(&self) -> Option<chrono::Duration> {
         (self.default_reminder_minutes > 0)
             .then(|| chrono::Duration::minutes(i64::from(self.default_reminder_minutes)))
+    }
+
+    /// The reminder lead time for events in `calendar_id`: the calendar's own
+    /// if it sets one, otherwise the app-wide default.
+    #[must_use]
+    pub fn reminder_for(&self, calendar_id: &str) -> Option<chrono::Duration> {
+        match self.defaults_for(calendar_id) {
+            Some(defaults) if defaults.reminder_minutes > 0 => Some(chrono::Duration::minutes(
+                i64::from(defaults.reminder_minutes),
+            )),
+            _ => self.default_reminder(),
+        }
+    }
+
+    /// How long a new event in `calendar_id` lasts. An hour unless the
+    /// calendar says otherwise.
+    #[must_use]
+    pub fn duration_for(&self, calendar_id: &str) -> chrono::Duration {
+        match self.defaults_for(calendar_id) {
+            Some(defaults) if defaults.duration_minutes > 0 => {
+                chrono::Duration::minutes(i64::from(defaults.duration_minutes))
+            }
+            _ => chrono::Duration::hours(1),
+        }
+    }
+
+    #[must_use]
+    pub fn defaults_for(&self, calendar_id: &str) -> Option<&CalendarDefaults> {
+        self.calendar_defaults
+            .iter()
+            .find(|d| d.calendar_id == calendar_id)
+    }
+
+    /// Replaces one calendar's overrides, dropping the entry entirely when
+    /// both fields are back to "use the app-wide value".
+    pub fn set_defaults_for(&mut self, calendar_id: &str, reminder: u32, duration: u32) {
+        self.calendar_defaults
+            .retain(|d| d.calendar_id != calendar_id);
+        if reminder > 0 || duration > 0 {
+            self.calendar_defaults.push(CalendarDefaults {
+                calendar_id: calendar_id.to_owned(),
+                reminder_minutes: reminder,
+                duration_minutes: duration,
+            });
+        }
     }
 
     #[must_use]
@@ -135,6 +260,64 @@ mod tests {
         config.toggle_calendar("work");
         assert!(!config.is_hidden("work"));
         assert!(config.hidden_calendars.is_empty());
+    }
+
+    #[test]
+    fn a_calendar_without_overrides_uses_the_app_defaults() {
+        let config = Config {
+            default_reminder_minutes: 15,
+            ..Config::default()
+        };
+        assert_eq!(
+            config.reminder_for("work"),
+            Some(chrono::Duration::minutes(15))
+        );
+        assert_eq!(config.duration_for("work"), chrono::Duration::hours(1));
+    }
+
+    #[test]
+    fn a_calendars_own_defaults_win() {
+        let mut config = Config {
+            default_reminder_minutes: 15,
+            ..Config::default()
+        };
+        config.set_defaults_for("work", 30, 45);
+
+        assert_eq!(
+            config.reminder_for("work"),
+            Some(chrono::Duration::minutes(30))
+        );
+        assert_eq!(config.duration_for("work"), chrono::Duration::minutes(45));
+        // Other calendars are untouched.
+        assert_eq!(
+            config.reminder_for("personal"),
+            Some(chrono::Duration::minutes(15))
+        );
+    }
+
+    #[test]
+    fn clearing_both_overrides_forgets_the_calendar() {
+        // Otherwise the list would grow an inert entry per calendar ever
+        // touched, and every one of them would be written back to disk.
+        let mut config = Config::default();
+        config.set_defaults_for("work", 30, 45);
+        assert_eq!(config.calendar_defaults.len(), 1);
+
+        config.set_defaults_for("work", 0, 0);
+        assert!(config.calendar_defaults.is_empty());
+        assert_eq!(config.duration_for("work"), chrono::Duration::hours(1));
+    }
+
+    #[test]
+    fn setting_one_override_twice_replaces_rather_than_duplicates() {
+        let mut config = Config::default();
+        config.set_defaults_for("work", 30, 0);
+        config.set_defaults_for("work", 60, 0);
+        assert_eq!(config.calendar_defaults.len(), 1);
+        assert_eq!(
+            config.reminder_for("work"),
+            Some(chrono::Duration::minutes(60))
+        );
     }
 
     #[test]

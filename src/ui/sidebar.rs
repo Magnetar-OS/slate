@@ -89,10 +89,12 @@ impl<'a> Sidebar<'a> {
                         .on_submit(|_| Message::NewCalendarConfirm)
                         .width(Length::Fill),
                 )
-                .push(
+                .push(widget::tooltip(
                     widget::button::icon(widget::icon::from_name("window-close-symbolic"))
                         .on_press(Message::NewCalendarCancel),
-                )
+                    widget::text::caption(fl!("cancel")),
+                    widget::tooltip::Position::Bottom,
+                ))
                 .into(),
             None => widget::button::text(fl!("new-calendar"))
                 .leading_icon(widget::icon::from_name("list-add-symbolic"))
@@ -109,16 +111,26 @@ impl<'a> Sidebar<'a> {
             .into()
     }
 
+    /// The icon-only sidebar: one swatch per calendar, name in a tooltip,
+    /// press to toggle. The mini month has no narrow form and is simply
+    /// absent here.
+    #[must_use]
+    pub fn rail(&self) -> Element<'a, Message> {
+        cosmic_ext_widgets::rail(self.calendars.iter().map(|calendar| {
+            let visible = !self.config.is_hidden(&calendar.id);
+            cosmic_ext_widgets::rail_item(
+                swatch(calendar, visible, 16.0),
+                calendar.name.clone(),
+                false,
+                Message::ToggleCalendar(calendar.id.clone()),
+            )
+        }))
+    }
+
     fn calendar_row(&self, calendar: &'a CalendarMeta) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
         let visible = !self.config.is_hidden(&calendar.id);
-
-        let swatch = widget::container(
-            widget::Space::new()
-                .width(Length::Fixed(12.0))
-                .height(Length::Fixed(12.0)),
-        )
-        .class(swatch_style(calendar.color, visible));
+        let swatch = swatch(calendar, visible, 12.0);
 
         let mut label = widget::text::body(calendar.name.clone())
             .wrapping(cosmic::iced::core::text::Wrapping::None)
@@ -150,6 +162,18 @@ impl<'a> Sidebar<'a> {
             .on_press(Message::ToggleCalendar(calendar.id.clone()))
             .into()
     }
+}
+
+/// The calendar's colour as a rounded square: filled while it is shown, an
+/// outline while it is hidden.
+fn swatch<'a>(calendar: &CalendarMeta, visible: bool, size: f32) -> Element<'a, Message> {
+    widget::container(
+        widget::Space::new()
+            .width(Length::Fixed(size))
+            .height(Length::Fixed(size)),
+    )
+    .class(swatch_style(calendar.color, visible))
+    .into()
 }
 
 fn swatch_style(rgb: crate::model::Rgb, visible: bool) -> cosmic::theme::Container<'static> {

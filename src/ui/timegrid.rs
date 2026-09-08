@@ -8,8 +8,8 @@
 //! time are dealt columns side by side, the way every other calendar draws them.
 
 use super::{
-    HOUR_HEIGHT, MIN_BLOCK_HEIGHT, TODAY_BADGE, color_bar, dim_text, hour_rule, now_dot,
-    now_marker, panel_surface, today_badge,
+    HOUR_HEIGHT, MIN_BLOCK_HEIGHT, TODAY_BADGE, color_bar, dim_text, event_chip, hour_rule,
+    now_dot, now_marker, panel_surface, today_badge,
 };
 use crate::app::Message;
 use crate::config::Config;
@@ -27,10 +27,17 @@ const GUTTER: f32 = 60.0;
 /// Full height of the 24-hour ruler.
 const GRID_HEIGHT: f32 = HOUR_HEIGHT * 24.0;
 
+/// The bright, unshaded band of the day: 09:00 (inclusive) to 18:00 (exclusive).
+const WORK_START: u32 = 9;
+const WORK_END: u32 = 18;
+
+/// Height of the resize grip along a block's bottom edge.
+const RESIZE_GRIP: f32 = 6.0;
+
 /// Identifies the hour-grid scrollable so the app can scroll it programmatically.
 #[must_use]
 pub fn scroll_id() -> cosmic::widget::Id {
-    cosmic::widget::Id::new("cosmic-calendar-timegrid")
+    cosmic::widget::Id::new("slate-timegrid")
 }
 
 /// Vertical offset that puts `hour` at the top of the viewport.
@@ -62,6 +69,9 @@ pub struct TimeGrid<'a> {
     pub occurrences: &'a BTreeMap<NaiveDate, Vec<Occurrence>>,
     pub calendars: &'a [CalendarMeta],
     pub config: &'a Config,
+    /// The span an in-progress drag would commit, painted as a translucent
+    /// target so the hand knows where the event will land before letting go.
+    pub ghost: Option<(NaiveDateTime, NaiveDateTime)>,
 }
 
 impl<'a> TimeGrid<'a> {
@@ -89,11 +99,37 @@ impl<'a> TimeGrid<'a> {
         (0..self.days).map(move |i| start + Duration::days(i))
     }
 
+    /// The hour gutter's total width: doubled when a secondary timezone adds
+    /// its own label column, so the day columns above and below stay aligned.
+    fn gutter_width(&self) -> f32 {
+        if self.config.secondary_tz().is_some() {
+            2.0 * GUTTER
+        } else {
+            GUTTER
+        }
+    }
+
     fn header_row(&self) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
+        // The gutter corner shows the ISO week number when asked — the same
+        // setting the month grid honours.
+        let corner: Element<'a, Message> = if self.config.show_week_numbers {
+            widget::text::caption(fl!("week-abbrev", number = super::week_number(self.start)))
+                .class(cosmic::theme::Text::Custom(dim_text))
+                .apply(widget::container)
+                .width(Length::Fixed(self.gutter_width()))
+                .align_x(Alignment::End)
+                .padding([0, 6, 0, 0])
+                .into()
+        } else {
+            widget::Space::new()
+                .width(Length::Fixed(self.gutter_width()))
+                .into()
+        };
+
         let mut row = widget::row::with_capacity(self.days as usize + 1)
             .spacing(spacing.space_xxxs)
-            .push(widget::Space::new().width(Length::Fixed(GUTTER)));
+            .push(corner);
 
         for date in self.dates() {
             let is_today = date == self.today;
@@ -151,7 +187,7 @@ impl<'a> TimeGrid<'a> {
                 widget::text::caption(fl!("all-day-events"))
                     .class(cosmic::theme::Text::Custom(dim_text))
                     .apply(widget::container)
-                    .width(Length::Fixed(GUTTER))
+                    .width(Length::Fixed(self.gutter_width()))
                     .align_y(Alignment::Center),
             );
 
@@ -190,48 +226,123 @@ impl<'a> TimeGrid<'a> {
         row.height(Length::Fixed(GRID_HEIGHT)).into()
     }
 
-    /// The gutter of hour labels, each sitting on its rule.
+    /// The gutter of hour labels, each sitting on its rule — preceded by a
+    /// second column in the secondary timezone when one is configured.
     fn hour_labels(&self) -> Element<'a, Message> {
-        let mut column = widget::column::with_capacity(24);
+        let label_column = |labels: [String; 24]| {
+            let mut column = widget::column::with_capacity(24);
+            for label in labels {
+                column = column.push(
+                    widget::text::caption(label)
+                        .class(cosmic::theme::Text::Custom(dim_text))
+                        .apply(widget::container)
+                        .width(Length::Fixed(GUTTER))
+                        .height(Length::Fixed(HOUR_HEIGHT))
+                        .align_x(Alignment::End)
+                        .align_y(Alignment::Start)
+                        .padding([0, 6, 0, 0]),
+                );
+            }
+            column
+        };
 
-        for hour in 0..24u32 {
-            let time = NaiveTime::from_hms_opt(hour, 0, 0).unwrap_or(NaiveTime::MIN);
-            column = column.push(
-                widget::text::caption(super::format_time(time, self.config))
-                    .class(cosmic::theme::Text::Custom(dim_text))
-                    .apply(widget::container)
-                    .width(Length::Fixed(GUTTER))
-                    .height(Length::Fixed(HOUR_HEIGHT))
-                    .align_x(Alignment::End)
-                    .align_y(Alignment::Start)
-                    .padding([0, 6, 0, 0]),
-            );
-        }
+        let primary = std::array::from_fn(|hour| {
+            let time = NaiveTime::from_hms_opt(hour as u32, 0, 0).unwrap_or(NaiveTime::MIN);
+            super::format_time(time, self.config)
+        });
 
-        column.into()
+        let Some(secondary_tz) = self.config.secondary_tz() else {
+            return label_column(primary).into();
+        };
+
+        // Convert each local rule hour on the grid's first day into the
+        // secondary zone. The date matters: the offset difference moves with
+        // DST on either side.
+        use chrono::TimeZone;
+        let local = crate::model::local_timezone();
+        let secondary = std::array::from_fn(|hour| {
+            let naive = self
+                .start
+                .and_hms_opt(hour as u32, 0, 0)
+                .unwrap_or_else(|| self.start.and_time(NaiveTime::MIN));
+            local
+                .from_local_datetime(&naive)
+                .earliest()
+                .map_or_else(String::new, |instant| {
+                    super::format_time(instant.with_timezone(&secondary_tz).time(), self.config)
+                })
+        });
+
+        widget::row::with_capacity(2)
+            .push(label_column(secondary))
+            .push(label_column(primary))
+            .into()
     }
 
-    /// One day: rules and click targets, then event blocks, then the now marker.
+    /// One day: rules and click targets, then event blocks, then the now
+    /// marker — the whole stack wrapped in a mouse area that reports where the
+    /// pointer is and when it lets go, which is what drags are made of.
     fn day_column(&self, date: NaiveDate) -> Element<'a, Message> {
-        let mut layers: Vec<Element<'a, Message>> = vec![self.hour_cells(date)];
+        let mut layers: Vec<Element<'a, Message>> = vec![Self::hour_cells(date)];
 
         for block in self.layout_day(date) {
             layers.push(self.block_element(block));
+        }
+
+        if let Some(ghost) = self.ghost_on(date) {
+            layers.push(ghost);
         }
 
         if date == self.today {
             layers.push(self.now_line());
         }
 
-        cosmic::iced::widget::stack(layers)
+        let stack = cosmic::iced::widget::stack(layers)
             .width(Length::Fill)
-            .height(Length::Fixed(GRID_HEIGHT))
+            .height(Length::Fixed(GRID_HEIGHT));
+
+        widget::mouse_area(stack)
+            .on_move(move |point| Message::GridHover(date, point.y))
+            .on_release(Message::GridRelease)
             .into()
     }
 
-    /// The background layer: an hour rule per row, each row a click target that
-    /// creates an event at that hour.
-    fn hour_cells(&self, date: NaiveDate) -> Element<'a, Message> {
+    /// The drag target's portion falling on `date`, clipped like blocks are.
+    fn ghost_on(&self, date: NaiveDate) -> Option<Element<'a, Message>> {
+        let (from, to) = self.ghost?;
+        let day_start = date.and_time(NaiveTime::MIN);
+        let day_end = day_start + Duration::days(1);
+        if from >= day_end || to <= day_start {
+            return None;
+        }
+        let top_min = minutes_from_midnight(from.max(day_start));
+        let end_min = if to >= day_end {
+            24.0 * 60.0
+        } else {
+            minutes_from_midnight(to)
+        };
+        let top = top_min / 60.0 * HOUR_HEIGHT;
+        let height = ((end_min - top_min) / 60.0 * HOUR_HEIGHT).max(MIN_BLOCK_HEIGHT);
+
+        Some(
+            widget::column::with_capacity(2)
+                .push(widget::Space::new().height(Length::Fixed(top)))
+                .push(
+                    widget::container(widget::Space::new())
+                        .class(super::ghost_chip())
+                        .width(Length::Fill)
+                        .height(Length::Fixed(height)),
+                )
+                .width(Length::Fill)
+                .into(),
+        )
+    }
+
+    /// The background layer: an hour rule per row, each row a press target
+    /// that starts creating an event — a plain click lands at that hour, a
+    /// drag sweeps out the span. Hours outside 09:00–18:00 carry a faint
+    /// tint, so working hours read as the bright band.
+    fn hour_cells(date: NaiveDate) -> Element<'a, Message> {
         let mut column = widget::column::with_capacity(24);
 
         for hour in 0..24u32 {
@@ -245,12 +356,20 @@ impl<'a> TimeGrid<'a> {
                 )
                 .push(widget::Space::new().height(Length::Fill));
 
+            let mut cell = widget::container(cell)
+                .width(Length::Fill)
+                .height(Length::Fixed(HOUR_HEIGHT));
+            if !(WORK_START..WORK_END).contains(&hour) {
+                cell = cell.class(super::off_hours_shade());
+            }
+
             column = column.push(
-                widget::mouse_area(cell.width(Length::Fill).height(Length::Fixed(HOUR_HEIGHT)))
-                    .on_press(Message::NewEventAt(
+                widget::mouse_area(cell)
+                    .on_press(Message::GridEmptyPress(
                         date.and_hms_opt(hour, 0, 0)
                             .unwrap_or_else(|| date.and_time(NaiveTime::MIN)),
-                    )),
+                    ))
+                    .on_release(Message::GridRelease),
             );
         }
 
@@ -316,23 +435,59 @@ impl<'a> TimeGrid<'a> {
         }
         let body = body.push(label);
 
-        let button = widget::button::custom(body)
-            .class(super::event_chip(color))
-            .padding(2)
-            .width(Length::Fill)
-            .height(Length::Fixed(block.height))
-            .on_press(Message::OpenEvent(
-                occurrence.calendar_id.clone(),
-                occurrence.uid.clone(),
-            ));
+        let block_ref = |resize: bool| crate::app::GridBlockRef {
+            calendar_id: occurrence.calendar_id.clone(),
+            uid: occurrence.uid.clone(),
+            rid: occurrence.recurrence_id,
+            start: occurrence.start,
+            end: occurrence.end,
+            resize,
+        };
+
+        // The bottom strip is the resize grip: its own press target inside
+        // the block, so a grab low on the block drags the end, anywhere else
+        // moves the whole event. Every press target also takes the release,
+        // because `mouse_area` captures both — a release handled only further
+        // out would never arrive, and the drag would never commit.
+        let content = widget::column::with_capacity(2)
+            .push(widget::container(body).height(Length::Fill).padding(2))
+            .push(
+                widget::mouse_area(
+                    widget::Space::new()
+                        .width(Length::Fill)
+                        .height(Length::Fixed(RESIZE_GRIP)),
+                )
+                .on_press(Message::GridBlockPress(block_ref(true)))
+                .on_release(Message::GridRelease),
+            );
+
+        // A button wrapping a mouse area, which reads backwards but is what
+        // makes the block both draggable and keyboard-operable: the inner area
+        // captures the mouse press and release, so a drag can begin before a
+        // click would have fired, while the outer button keeps the focus ring
+        // and Enter-to-activate that no mouse area offers.
+        let chip = widget::button::custom(
+            widget::mouse_area(content)
+                .on_press(Message::GridBlockPress(block_ref(false)))
+                .on_release(Message::GridRelease),
+        )
+        .class(event_chip(color))
+        .padding(0)
+        .width(Length::Fill)
+        .height(Length::Fixed(block.height))
+        .on_press(Message::OpenEvent(
+            occurrence.calendar_id.clone(),
+            occurrence.uid.clone(),
+            occurrence.recurrence_id,
+        ));
 
         // When the label had to be abbreviated, hovering should still tell the
         // whole story.
         let block_button: Element<'a, Message> = if roomy {
-            button.into()
+            chip.into()
         } else {
             widget::tooltip(
-                button,
+                chip,
                 widget::text::caption(self.full_label(occurrence)),
                 widget::tooltip::Position::Top,
             )
@@ -549,6 +704,7 @@ mod tests {
             occurrences: &map,
             calendars: &calendars,
             config: &config,
+            ghost: None,
         };
 
         view.layout_day(date)
@@ -664,5 +820,70 @@ mod tests {
         let mut all_day = occurrence("Holiday", at(0, 0), at(23, 59));
         all_day.all_day = true;
         assert!(layout(vec![all_day]).is_empty());
+    }
+
+    /// Performance baseline for the per-frame layout cost of a busy week:
+    /// 7 days × 30 timed events, heavily overlapping. Run in release, where
+    /// the numbers mean something:
+    ///
+    /// ```sh
+    /// cargo test --release timegrid_layout_baseline -- --ignored --nocapture
+    /// ```
+    ///
+    /// Recorded baselines live in PERFORMANCE.md; re-run after touching the
+    /// layout and compare.
+    #[test]
+    #[ignore = "perf baseline; run explicitly in release with --nocapture"]
+    fn timegrid_layout_baseline() {
+        let monday = NaiveDate::from_ymd_opt(2026, 8, 3).unwrap();
+        let mut map = BTreeMap::new();
+        for d in 0..7u64 {
+            let date = monday + Duration::days(d as i64);
+            let events: Vec<Occurrence> = (0..30u32)
+                .map(|i| {
+                    // Staggered 50-minute events, five an hour from 08:00 —
+                    // every one overlaps its neighbours.
+                    let start = date.and_hms_opt(8 + i / 5, (i % 5) * 10, 0).unwrap();
+                    occurrence(&format!("E{d}-{i}"), start, start + Duration::minutes(50))
+                })
+                .collect();
+            map.insert(date, events);
+        }
+
+        let config = Config::default();
+        let calendars: Vec<CalendarMeta> = Vec::new();
+        let view = TimeGrid {
+            start: monday,
+            days: 7,
+            today: monday,
+            now: at(12, 0),
+            occurrences: &map,
+            calendars: &calendars,
+            config: &config,
+            ghost: None,
+        };
+
+        // Warm-up plus sanity: the week really holds 210 blocks.
+        let total: usize = (0..7)
+            .map(|d| view.layout_day(monday + Duration::days(d)).len())
+            .sum();
+        assert_eq!(total, 210);
+
+        const RUNS: usize = 1000;
+        let mut samples: Vec<u128> = Vec::with_capacity(RUNS);
+        for _ in 0..RUNS {
+            let t = std::time::Instant::now();
+            for d in 0..7 {
+                std::hint::black_box(view.layout_day(monday + Duration::days(d)));
+            }
+            samples.push(t.elapsed().as_micros());
+        }
+        samples.sort_unstable();
+        println!(
+            "layout_day × 7 days, 210 blocks: min {} µs · p50 {} µs · p95 {} µs",
+            samples[0],
+            samples[RUNS / 2],
+            samples[RUNS * 95 / 100],
+        );
     }
 }

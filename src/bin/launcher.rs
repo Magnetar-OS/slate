@@ -12,13 +12,14 @@
 //! `"Finished"`, or `"Close"` after activating a result.
 
 use chrono::{Datelike, Duration, NaiveDate};
-use cosmic_calendar::config::Config;
-use cosmic_calendar::model::Occurrence;
-use cosmic_calendar::store::Store;
 use serde_json::{Value, json};
+use slate::config::Config;
+use slate::fl;
+use slate::model::Occurrence;
+use slate::store::Store;
 use std::io::{BufRead, Write};
 
-const APP_ID: &str = "io.github.entro314labs.Calendar";
+const APP_ID: &str = "io.github.entro314labs.Slate";
 
 /// How far either side of today to search.
 ///
@@ -35,9 +36,12 @@ fn main() {
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "cosmic_calendar=warn".into()),
+                .unwrap_or_else(|_| "slate=warn".into()),
         )
         .init();
+
+    // Results are shown to a person, so they follow the desktop's language.
+    slate::i18n::init(&i18n_embed::DesktopLanguageRequester::requested_languages());
 
     let mut plugin = Plugin::new();
     let stdin = std::io::stdin();
@@ -65,6 +69,9 @@ struct Plugin {
     config: Config,
     /// Results from the last search, indexed by the id sent to the launcher.
     results: Vec<Occurrence>,
+    /// Drives the one async call this plugin makes: detaching the process it
+    /// spawns. Built once because the plugin outlives many queries.
+    runtime: Option<tokio::runtime::Runtime>,
 }
 
 impl Plugin {
@@ -77,10 +84,22 @@ impl Plugin {
             }
         };
 
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => Some(runtime),
+            Err(why) => {
+                tracing::error!(%why, "no async runtime; results will not open");
+                None
+            }
+        };
+
         Self {
             store,
             config: load_config(),
             results: Vec::new(),
+            runtime,
         }
     }
 
@@ -184,12 +203,21 @@ impl Plugin {
     fn activate(&mut self, id: usize) {
         if let Some(occurrence) = self.results.get(id) {
             let date = occurrence.start.date();
-            let result = std::process::Command::new("cosmic-calendar")
-                .arg(format!("--date={date}"))
-                .spawn();
 
-            if let Err(why) = result {
-                tracing::warn!(%why, "could not launch cosmic-calendar");
+            // The canonical launch path: double fork + setsid underneath, plus
+            // a systemd transient scope. A plain `Command::spawn` would leave
+            // the calendar a child of this plugin, which pop-launcher owns and
+            // reaps — closing the launcher would take the window with it. No
+            // activation token here: a pop-launcher plugin owns no surface to
+            // bind one to, and the app raises its existing window itself.
+            match self.runtime.as_ref() {
+                Some(runtime) => runtime.block_on(cosmic::desktop::spawn_desktop_exec(
+                    format!("slate --date={date}"),
+                    std::iter::empty::<(&str, &str)>(),
+                    Some(APP_ID),
+                    false,
+                )),
+                None => tracing::warn!("no runtime; cannot launch the calendar"),
             }
         }
 
@@ -199,7 +227,7 @@ impl Plugin {
 
 fn display_name(occurrence: &Occurrence) -> String {
     if occurrence.summary.trim().is_empty() {
-        "(No title)".to_owned()
+        fl!("untitled-event")
     } else {
         occurrence.summary.clone()
     }
@@ -208,14 +236,14 @@ fn display_name(occurrence: &Occurrence) -> String {
 fn describe(occurrence: &Occurrence, today: NaiveDate, config: &Config) -> String {
     let date = occurrence.start.date();
     let day = match (date - today).num_days() {
-        0 => "Today".to_owned(),
-        1 => "Tomorrow".to_owned(),
-        -1 => "Yesterday".to_owned(),
+        0 => fl!("today"),
+        1 => fl!("tomorrow"),
+        -1 => fl!("yesterday"),
         _ => format!(
             "{} {} {}",
-            cosmic_calendar::ui::weekday_short(date.weekday()),
+            slate::ui::weekday_short(date.weekday()),
             date.day(),
-            cosmic_calendar::ui::month_name(date.month())
+            slate::ui::month_name(date.month())
         ),
     };
 
@@ -224,7 +252,7 @@ fn describe(occurrence: &Occurrence, today: NaiveDate, config: &Config) -> Strin
     } else {
         format!(
             "{day} · {}",
-            cosmic_calendar::ui::format_time(occurrence.start.time(), config)
+            slate::ui::format_time(occurrence.start.time(), config)
         )
     };
 

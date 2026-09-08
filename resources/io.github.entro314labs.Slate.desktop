@@ -1,24 +1,38 @@
 [Desktop Entry]
-Name=Calendar
+Name=Slate
 GenericName=Calendar
-Comment=View and manage your events
-Categories=Office;Calendar;
-Exec=cosmic-calendar %U
-Icon=io.github.entro314labs.Calendar
+Comment=View and manage your events and tasks
+Categories=COSMIC;Office;Calendar;
+Exec=slate %U
+Icon=io.github.entro314labs.Slate
 Terminal=false
 Type=Application
 StartupNotify=true
-StartupWMClass=io.github.entro314labs.Calendar
+StartupWMClass=io.github.entro314labs.Slate
 MimeType=text/calendar;
-Keywords=calendar;event;schedule;appointment;agenda;
-# Routes activations — including opening a .ics — to the running instance.
-DBusActivatable=true
+Keywords=calendar;event;schedule;appointment;agenda;task;
+# Reminders are desktop notifications, so the app belongs in the desktop's
+# notification settings.
+X-GNOME-UsesNotifications=true
+# Deliberately NOT DBusActivatable, even though the app is single-instance.
+#
+# libcosmic's run_single_instance claims this bus name but serves the interface
+# as org.freedesktop.DbusActivation, not the org.freedesktop.Application the
+# freedesktop spec requires — verified with busctl. GIO calls the spec name and
+# gets "Unknown interface", and because that call is fire-and-forget the failure
+# is silent: opening a .ics from a file manager would do nothing at all. Cold
+# starts would fail too, since nothing installs a dbus-1 service file for the
+# name. No COSMIC app declares this key, for the same reason.
+#
+# The Exec lines below reach the same place. A second `slate` hands its command
+# line to the running instance over that same libcosmic interface and exits, so
+# `slate file.ics` and the two actions all land in the open window.
 Actions=new-event;today;
 
 [Desktop Action new-event]
 Name=New Event
-Exec=cosmic-calendar
+Exec=slate --new-event
 
 [Desktop Action today]
 Name=Today
-Exec=cosmic-calendar
+Exec=slate --today

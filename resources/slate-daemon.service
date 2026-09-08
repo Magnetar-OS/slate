@@ -1,21 +1,32 @@
 [Unit]
-Description=COSMIC Calendar reminder daemon
-Documentation=https://github.com/entro314-labs/cosmic-calendar
+Description=Slate reminder and sync daemon
+Documentation=https://github.com/entro314-labs/slate
 # Reminders are desktop notifications, so there must be a session to show them in.
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/cosmic-calendar-daemon
+ExecStart=/usr/bin/slate-daemon
 Restart=on-failure
 RestartSec=5
-# It only ever reads the calendar directory and talks to the session bus.
+# It reads the calendar directory, runs CalDAV/CardDAV sync, and talks to the
+# session bus. Everything else stays read-only.
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.local/share/calendars %h/.cache/cosmic-calendar
+# The write set, all of it shared with the rest of the suite rather than owned
+# by this app:
+#   calendars/contacts — the vdirs sync writes into
+#   cache/cosmic-pim   — the SQLite occurrence index
+#   config/cosmic-pim  — accounts.toml, rewritten when sync binds a collection
+#   share/cosmic-pim   — the envelope secret store, used when no OS keychain is up
+ReadWritePaths=%h/.local/share/calendars
+ReadWritePaths=%h/.local/share/contacts
+ReadWritePaths=%h/.cache/cosmic-pim
+ReadWritePaths=%h/.config/cosmic-pim
+ReadWritePaths=%h/.local/share/cosmic-pim
 
 [Install]
 WantedBy=graphical-session.target

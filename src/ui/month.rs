@@ -232,6 +232,7 @@ pub fn chip_button(
         .on_press(Message::OpenEvent(
             occurrence.calendar_id.clone(),
             occurrence.uid.clone(),
+            occurrence.recurrence_id,
         ))
         .into()
 }

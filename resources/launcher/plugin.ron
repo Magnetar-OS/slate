@@ -1,8 +1,8 @@
 (
-    name: "Calendar",
+    name: "Slate",
     description: "Search your calendar events",
     bin: (
-        path: "cosmic-calendar-launcher",
+        path: "slate-launcher",
     ),
     icon: Some(Name("x-office-calendar")),
     query: (

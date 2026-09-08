@@ -2,10 +2,10 @@
 Name=Calendar
 Comment=Upcoming events in the panel
 Type=Application
-Exec=cosmic-calendar-applet
-Icon=io.github.entro314labs.Calendar
+Exec=slate-applet
+Icon=io.github.entro314labs.Slate
 Terminal=false
-Categories=COSMIC;
+Categories=COSMIC;Office;
 # Marks this as a panel applet rather than something to show in the app grid.
 X-CosmicApplet=true
 X-CosmicHoverPopup=Auto

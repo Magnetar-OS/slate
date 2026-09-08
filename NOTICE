@@ -1,0 +1,57 @@
+Slate
+Copyright (c) 2026 Dominikos Pritis and contributors
+
+Slate links the cosmic-pim substrate, and the binaries distributed from this
+repository therefore contain code from the projects below. The notices are
+reproduced here because the obligation travels with the binary, not with the
+source repository the code happens to live in.
+
+The canonical copy of this file, covering the substrate itself, is at
+https://github.com/entro314-labs/cosmic-pim/blob/main/NOTICE
+
+
+--------------------------------------------------------------------------
+Anasa (https://github.com/entro314-labs/anasa)
+--------------------------------------------------------------------------
+
+The crash-safe file writer in cosmic-pim
+(`crates/cosmic-pim-core/src/atomic.rs`) is derived from
+`apps/desktop/src-tauri/src/atomic_write.rs` in the Anasa project, and is
+redistributed under the Mozilla Public License 2.0 as permitted by the MIT
+licence of the original. MIT requires the notice below to be retained; do not
+remove it.
+
+    MIT License
+
+    Copyright (c) Dominikos Pritis
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+    THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+
+--------------------------------------------------------------------------
+Meltemi (https://github.com/entro314-labs/meltemi)
+--------------------------------------------------------------------------
+
+The iCalendar layer and the CalDAV/CardDAV engine in cosmic-pim derive from
+`src-tauri/src/caldav.rs` in the Meltemi project.
+
+NOTE: at the time of writing the Meltemi repository carries no licence
+declaration. Both projects share a copyright holder, so redistribution under
+MPL-2.0 is authorised by that holder — but see cosmic-pim/LICENSING.md for the
+outstanding action required to make that explicit rather than implicit.

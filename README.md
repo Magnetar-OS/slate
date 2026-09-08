@@ -119,7 +119,7 @@ validation, formatting, clippy, and the test suite. The metadata pass needs
 | --- | --- |
 | `~/.local/share/calendars/` | Your calendars. One directory per calendar, one `.ics` per event. |
 | `~/.cache/cosmic-pim/index.sqlite` | Query index, shared with the suite. Pure cache — safe to delete, rebuilds itself. |
-| `~/.config/cosmic/io.github.entro314labs.Slate/` | Settings, via `cosmic-config`. |
+| `~/.config/cosmic/com.magnetaros.Slate/` | Settings, via `cosmic-config`. |
 | `~/.config/cosmic-pim/accounts.toml` | Accounts, shared with Circle and Envelope. Passwords live in the OS keychain. |
 | `/usr/share/pop-launcher/plugins/slate/` | Launcher plugin registration. |
 | `/usr/lib/systemd/user/slate-daemon.service` | Reminder daemon unit. |
@@ -210,13 +210,13 @@ minutes stale is dropped — otherwise opening the app in the evening would repl
 
 **Reminders with the window closed.** `slate-daemon` does nothing but watch the vdir and
 notify. Both it and the app can see the same events, so they arbitrate over a D-Bus name: the daemon
-claims `io.github.entro314labs.Slate.Reminders` at startup, and the app checks for it and stays
+claims `com.magnetaros.Slate.Reminders` at startup, and the app checks for it and stays
 quiet while it is held. A second daemon bows out with a success exit code, because failing would put
 systemd's `Restart=on-failure` into a loop.
 
 **One window, whatever opens it.** The app runs through libcosmic's
 `run_single_instance`, which serves `org.freedesktop.Application` on
-`io.github.entro314labs.Slate`. That is what backs the `DBusActivatable=true` in
+`com.magnetaros.Slate`. That is what backs the `DBusActivatable=true` in
 the desktop entry, and it means a second `slate` hands its command line to the
 running window and exits rather than opening a second copy — whether that is a
 file manager passing a `.ics`, the applet asking for a date, the launcher opening

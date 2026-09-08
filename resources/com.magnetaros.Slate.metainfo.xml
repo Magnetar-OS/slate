@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.entro314labs.Slate</id>
+  <id>com.magnetaros.Slate</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <!-- What marks this as part of the COSMIC set rather than a generic GTK app. -->
@@ -9,13 +9,13 @@
   <name>Slate</name>
   <summary>View and manage your events and tasks</summary>
 
-  <developer id="io.github.entro314labs">
+  <developer id="com.magnetaros">
     <name>entro314 labs</name>
   </developer>
 
-  <url type="homepage">https://github.com/entro314-labs/slate</url>
-  <url type="bugtracker">https://github.com/entro314-labs/slate/issues</url>
-  <url type="vcs-browser">https://github.com/entro314-labs/slate</url>
+  <url type="homepage">https://github.com/Magnetar-OS/slate</url>
+  <url type="bugtracker">https://github.com/Magnetar-OS/slate/issues</url>
+  <url type="vcs-browser">https://github.com/Magnetar-OS/slate</url>
 
   <description>
     <p>
@@ -38,7 +38,7 @@
     </ul>
   </description>
 
-  <launchable type="desktop-id">io.github.entro314labs.Slate.desktop</launchable>
+  <launchable type="desktop-id">com.magnetaros.Slate.desktop</launchable>
 
   <!--
     Flathub requires at least one screenshot, and they must be hosted, not
@@ -55,24 +55,24 @@
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/entro314-labs/slate/main/resources/screenshots/week.png</image>
+      <image>https://raw.githubusercontent.com/Magnetar-OS/slate/main/resources/screenshots/week.png</image>
       <caption>The week view</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/entro314-labs/slate/main/resources/screenshots/month.png</image>
+      <image>https://raw.githubusercontent.com/Magnetar-OS/slate/main/resources/screenshots/month.png</image>
       <caption>The month view</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/entro314-labs/slate/main/resources/screenshots/editor.png</image>
+      <image>https://raw.githubusercontent.com/Magnetar-OS/slate/main/resources/screenshots/editor.png</image>
       <caption>Editing one occurrence of a repeating event</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/entro314-labs/slate/main/resources/screenshots/agenda.png</image>
+      <image>https://raw.githubusercontent.com/Magnetar-OS/slate/main/resources/screenshots/agenda.png</image>
       <caption>The agenda view</caption>
     </screenshot>
   </screenshots>
   -->
-  <icon type="remote" width="64" height="64" scale="1">https://raw.githubusercontent.com/entro314-labs/slate/main/resources/icons/hicolor/scalable/apps/icon.svg</icon>
+  <icon type="remote" width="64" height="64" scale="1">https://raw.githubusercontent.com/Magnetar-OS/slate/main/resources/icons/hicolor/scalable/apps/icon.svg</icon>
 
   <!-- How the COSMIC App Library and store recognise a COSMIC application, and
        which binary and file types this component actually provides. -->

@@ -757,7 +757,7 @@ impl cosmic::Application for AppModel {
     type Flags = Flags;
     type Message = Message;
 
-    const APP_ID: &'static str = "io.github.entro314labs.Slate";
+    const APP_ID: &'static str = "com.magnetaros.Slate";
 
     fn core(&self) -> &cosmic::Core {
         &self.core

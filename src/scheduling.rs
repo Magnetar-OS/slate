@@ -20,11 +20,11 @@
 use cosmic::iced::futures::channel::mpsc::UnboundedSender;
 
 /// The object path both apps derive from their own well-known name.
-pub const OBJECT_PATH: &str = "/io/github/entro314labs/Slate";
+pub const OBJECT_PATH: &str = "/com/magnetaros/Slate";
 /// Envelope's side of the contract, for the reply direction.
-pub const ENVELOPE_NAME: &str = "io.github.entro314labs.Envelope";
-pub const ENVELOPE_PATH: &str = "/io/github/entro314labs/Envelope";
-const INTERFACE: &str = "io.github.entro314labs.CosmicPim.Scheduling1";
+pub const ENVELOPE_NAME: &str = "com.magnetaros.Envelope";
+pub const ENVELOPE_PATH: &str = "/com/magnetaros/Envelope";
+const INTERFACE: &str = "com.magnetaros.CosmicPim.Scheduling1";
 
 /// An invitation as delivered: the verbatim payload and the suite account it
 /// arrived on.
@@ -46,7 +46,7 @@ impl Scheduling {
     }
 }
 
-#[zbus::interface(name = "io.github.entro314labs.CosmicPim.Scheduling1")]
+#[zbus::interface(name = "com.magnetaros.CosmicPim.Scheduling1")]
 impl Scheduling {
     /// Takes one `text/calendar` payload off a mailer's hands.
     fn deliver_invitation(&self, ics: String, account_id: String) -> bool {

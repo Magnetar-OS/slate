@@ -23,8 +23,8 @@ use slate::model::{CalendarMeta, Occurrence, Todo};
 use slate::store::Store;
 use slate::ui;
 
-const ID: &str = "io.github.entro314labs.SlateApplet";
-const APP_ID: &str = "io.github.entro314labs.Slate";
+const ID: &str = "com.magnetaros.SlateApplet";
+const APP_ID: &str = "com.magnetaros.Slate";
 
 /// How far ahead the popup looks.
 const HORIZON_DAYS: i64 = 7;

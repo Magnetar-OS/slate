@@ -9,7 +9,7 @@
 #   - slate-daemon    a systemd user unit; also, reminders belong to whichever
 #                     process claims the D-Bus name, which the app does fine
 #   - slate-launcher  pop-launcher loads plugins from host paths
-app-id: io.github.entro314labs.Slate
+app-id: com.magnetaros.Slate
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
@@ -57,12 +57,12 @@ modules:
     build-commands:
       - cargo --offline build --release --locked --bin slate
       - install -Dm0755 target/release/slate /app/bin/slate
-      - install -Dm0644 resources/io.github.entro314labs.Slate.desktop
-        /app/share/applications/io.github.entro314labs.Slate.desktop
-      - install -Dm0644 resources/io.github.entro314labs.Slate.metainfo.xml
-        /app/share/metainfo/io.github.entro314labs.Slate.metainfo.xml
+      - install -Dm0644 resources/com.magnetaros.Slate.desktop
+        /app/share/applications/com.magnetaros.Slate.desktop
+      - install -Dm0644 resources/com.magnetaros.Slate.metainfo.xml
+        /app/share/metainfo/com.magnetaros.Slate.metainfo.xml
       - install -Dm0644 resources/icons/hicolor/scalable/apps/icon.svg
-        /app/share/icons/hicolor/scalable/apps/io.github.entro314labs.Slate.svg
+        /app/share/icons/hicolor/scalable/apps/com.magnetaros.Slate.svg
     sources:
       - type: git
         url: https://github.com/Magnetar-OS/slate.git

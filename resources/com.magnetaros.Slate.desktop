@@ -4,11 +4,11 @@ GenericName=Calendar
 Comment=View and manage your events and tasks
 Categories=COSMIC;Office;Calendar;
 Exec=slate %U
-Icon=io.github.entro314labs.Slate
+Icon=com.magnetaros.Slate
 Terminal=false
 Type=Application
 StartupNotify=true
-StartupWMClass=io.github.entro314labs.Slate
+StartupWMClass=com.magnetaros.Slate
 MimeType=text/calendar;
 Keywords=calendar;event;schedule;appointment;agenda;task;
 # Reminders are desktop notifications, so the app belongs in the desktop's

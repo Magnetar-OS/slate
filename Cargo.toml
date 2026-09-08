@@ -131,7 +131,7 @@ features = [
 # cosmic-pim-sync = { path = "../cosmic-pim/crates/cosmic-pim-sync" }
 # cosmic-pim-caldav = { path = "../cosmic-pim/crates/cosmic-pim-caldav" }
 #
-# [patch.'https://github.com/entro314-labs/cosmic-ext-widgets']
+# [patch.'https://github.com/Magnetar-OS/cosmic-ext-widgets']
 # cosmic-ext-widgets = { path = "../cosmic-ext-widgets" }
 
 # Uncomment to test against a locally-cloned libcosmic

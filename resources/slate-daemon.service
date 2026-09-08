@@ -1,6 +1,6 @@
 [Unit]
 Description=Slate reminder and sync daemon
-Documentation=https://github.com/entro314-labs/slate
+Documentation=https://github.com/Magnetar-OS/slate
 # Reminders are desktop notifications, so there must be a session to show them in.
 PartOf=graphical-session.target
 After=graphical-session.target

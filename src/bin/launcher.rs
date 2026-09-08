@@ -19,7 +19,7 @@ use slate::model::Occurrence;
 use slate::store::Store;
 use std::io::{BufRead, Write};
 
-const APP_ID: &str = "io.github.entro314labs.Slate";
+const APP_ID: &str = "com.magnetaros.Slate";
 
 /// How far either side of today to search.
 ///

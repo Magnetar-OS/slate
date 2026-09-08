@@ -4,8 +4,8 @@ applet := 'slate-applet'
 daemon := 'slate-daemon'
 launcher := 'slate-launcher'
 # The unique ID of the application.
-appid := 'io.github.entro314labs.Slate'
-applet-appid := 'io.github.entro314labs.SlateApplet'
+appid := 'com.magnetaros.Slate'
+applet-appid := 'com.magnetaros.SlateApplet'
 
 # Path to root file system, which defaults to `/`.
 rootdir := ''

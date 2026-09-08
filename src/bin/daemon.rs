@@ -26,7 +26,7 @@ use slate::model::Occurrence;
 use slate::reminders::{self, Scheduler};
 use slate::store::{Store, watcher};
 
-const APP_ID: &str = "io.github.entro314labs.Slate";
+const APP_ID: &str = "com.magnetaros.Slate";
 
 /// How often to re-check for due reminders.
 ///

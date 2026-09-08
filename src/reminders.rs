@@ -177,7 +177,7 @@ impl Scheduler {
 /// same events. Without an arbiter the user would get every reminder twice. The
 /// daemon claims this name at startup; the app checks for it and stays quiet if
 /// someone already holds it.
-pub const OWNER_BUS_NAME: &str = "io.github.entro314labs.Slate.Reminders";
+pub const OWNER_BUS_NAME: &str = "com.magnetaros.Slate.Reminders";
 
 /// Claims responsibility for firing reminders.
 ///

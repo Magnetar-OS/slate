@@ -3,7 +3,7 @@ Name=Calendar
 Comment=Upcoming events in the panel
 Type=Application
 Exec=slate-applet
-Icon=io.github.entro314labs.Slate
+Icon=com.magnetaros.Slate
 Terminal=false
 Categories=COSMIC;Office;
 # Marks this as a panel applet rather than something to show in the app grid.

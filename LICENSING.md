@@ -28,6 +28,14 @@ application can no longer legally link it. The headers there are Exhibit A only:
 // SPDX-License-Identifier: MPL-2.0
 ```
 
+## The files in this repository
+
+`LICENSE` is the GPL-3.0 text — the licence of Slate and of the binaries it
+produces. `LICENSE.MPL-2.0` is the Mozilla Public License 2.0, shipped beside it
+because those binaries statically link MPL-2.0 files from cosmic-pim and a
+recipient is entitled to their terms. `NOTICE` carries the attribution
+obligations that travel with the binary.
+
 ## The full rationale
 
 Why MPL and not MIT, why not LGPL, the provenance of the borrowed code, and the
@@ -36,8 +44,10 @@ outstanding obligations live in
 That is the canonical copy; this file only records what the arrangement means
 for **this** repository.
 
-One item from it is worth repeating, because it blocks distribution rather than
-merely being untidy: parts of the substrate derive from the
+One item from it is worth repeating, because it once blocked distribution:
+parts of the substrate derive from the
 [Meltemi](https://github.com/entro314-labs/meltemi) project, which carries no
-licence declaration at all. Until that is fixed, the substrate must not be
-published to crates.io or offered upstream.
+whole-repository licence. It now grants MPL-2.0 (Exhibit A only) on each donor
+file, naming the derivatives, in its own `LICENSING.md`. That is what makes
+publishing the substrate legitimate; a future port must extend that grant table
+in the same commit.

@@ -51,7 +51,7 @@ Meltemi (https://github.com/entro314-labs/meltemi)
 The iCalendar layer and the CalDAV/CardDAV engine in cosmic-pim derive from
 `src-tauri/src/caldav.rs` in the Meltemi project.
 
-NOTE: at the time of writing the Meltemi repository carries no licence
-declaration. Both projects share a copyright holder, so redistribution under
-MPL-2.0 is authorised by that holder — but see cosmic-pim/LICENSING.md for the
-outstanding action required to make that explicit rather than implicit.
+Meltemi grants MPL-2.0 (Exhibit A only) on that file, naming the cosmic-pim
+derivatives, in its own LICENSING.md. Meltemi as a whole remains
+all-rights-reserved; the grant is per-file, which is exactly MPL's boundary.
+See cosmic-pim/LICENSING.md for the full account.

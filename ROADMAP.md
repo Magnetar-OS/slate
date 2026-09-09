@@ -275,6 +275,15 @@ internal compatibility layers; no second sync engine; no UI-side workarounds for
   (`SUMMARY;LANGUAGE=en-gb` verified through a save). `Event::other` remains,
   but only for the paths that serialise from nothing: a brand-new file, and
   export.
+- **Undo restores whole files, not single records.** The journal snapshots each
+  touched file before and after, so undoing an edit inside a file that holds
+  several records also reverts anything else edited in that file since. For
+  events this is usually right — a master and its overrides share a UID and are
+  one logical event — but a task file another program wrote can hold several
+  unrelated tasks, and there the restore is too wide. The clean fix journals the
+  component rather than the file and merges on restore, which wants the
+  component-addressed removal the substrate is growing; not worth a second
+  implementation here in the meantime.
 - **Read-side `RECURRENCE-ID` status** is the unknown that can reorder M1 — hence M0.
 - **Time-grid performance under iced/wgpu** is the biggest UI unknown; the M0 baseline exists so
   M4 is built on measurements, not optimism.

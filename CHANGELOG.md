@@ -114,6 +114,11 @@ All notable user-facing changes to Slate. The format follows
 
 ### Fixed
 
+- Saving a task no longer deletes the other tasks stored in the same file,
+  and editing an event keeps the parameters on the properties it does show —
+  a title's `LANGUAGE`, and the like. Both were substrate-side; both were
+  reachable from ordinary use here, the first by ticking a checkbox on a task
+  another program had written alongside others.
 - Dragging an event in the week or day view did nothing: the release that ends
   a drag was being swallowed before it reached the code that commits the move.
 - Events in the week and day views could not be reached with the keyboard, and

@@ -269,14 +269,12 @@ internal compatibility layers; no second sync engine; no UI-side workarounds for
 
 ## Risks
 
-- **Writing an event still re-serialises it from the model.** Unmodelled
-  properties are now carried verbatim in `Event::other`, which stopped the
-  data loss, but that is a mitigation rather than the fix: parameters on
-  properties that *are* modelled (`SUMMARY;LANGUAGE=en-us`) are still dropped,
-  because those never reach `other`. Contacts do not have this problem —
-  `vcard.rs` edits through the patcher, naming only the fields that changed.
-  Moving the calendar write path onto `patch_nth_component` the same way would
-  remove both the residue and the field.
+- ~~Writing an event re-serialises it from the model~~ — **closed.** The
+  substrate now edits events and tasks by patching the file rather than
+  rebuilding it, so parameters on modelled properties survive too
+  (`SUMMARY;LANGUAGE=en-gb` verified through a save). `Event::other` remains,
+  but only for the paths that serialise from nothing: a brand-new file, and
+  export.
 - **Read-side `RECURRENCE-ID` status** is the unknown that can reorder M1 — hence M0.
 - **Time-grid performance under iced/wgpu** is the biggest UI unknown; the M0 baseline exists so
   M4 is built on measurements, not optimism.

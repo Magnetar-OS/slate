@@ -275,6 +275,16 @@ internal compatibility layers; no second sync engine; no UI-side workarounds for
   (`SUMMARY;LANGUAGE=en-gb` verified through a save). `Event::other` remains,
   but only for the paths that serialise from nothing: a brand-new file, and
   export.
+- **Export drops parameters on the properties it displays.** `Export calendar…`
+  serialises from the model rather than copying the stored components, so an
+  event survives with its attendees, organizer, `STATUS`, `X-` properties and
+  the rest — but `SUMMARY;LANGUAGE=en-gb` comes back as plain `SUMMARY`
+  (verified). This is the last place the old re-serialisation residue lives:
+  editing was moved onto the patcher, and export is one of the two paths that
+  has no original bytes to patch. Fixing it means emitting each file's stored
+  components verbatim under one wrapper — which is exactly the shape that gave
+  Circle a duplication bug when done per-record instead of per-file, so it
+  wants doing carefully or not at all.
 - **Undo restores whole files, not single records.** The journal snapshots each
   touched file before and after, so undoing an edit inside a file that holds
   several records also reverts anything else edited in that file since. For

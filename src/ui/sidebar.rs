@@ -32,15 +32,24 @@ impl<'a> Sidebar<'a> {
         // Rendered into libcosmic's nav-bar slot, so it wears the desktop's own
         // nav-bar surface — same background, corner radii, and blur behaviour as
         // the sidebar in cosmic-files or cosmic-settings.
-        widget::column::with_capacity(3)
+        // Scrollable, because the mini month alone is over 300px tall and the
+        // window may be 560: without this the calendar list — and with it
+        // every visibility toggle and the "new calendar" button — sits below
+        // the bottom of a short window with no way to reach it.
+        //
+        // No `Fill` spacer inside: a scrollable gives its content unbounded
+        // height, so one would grow without limit instead of pushing content
+        // to the top. The container below fills the column either way.
+        widget::column::with_capacity(2)
             .spacing(spacing.space_s)
             .push(self.mini_month())
             .push(self.calendar_list())
-            .push(widget::Space::new().height(Length::Fill))
             // libcosmic's calendar widget hard-codes a 360px content width, so
             // anything narrower makes its 7-column grid wrap onto two rows.
             .width(Length::Fixed(MINI_CALENDAR_WIDTH + 2.0 * GUTTER))
             .padding(GUTTER as u16)
+            .apply(widget::scrollable)
+            .height(Length::Fill)
             .apply(widget::container)
             .class(cosmic::theme::Container::custom(
                 cosmic::widget::nav_bar::nav_bar_style,

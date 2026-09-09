@@ -271,6 +271,19 @@ quick-add-placeholder = lunch with Maria Thu 13:00 at Kolonaki
 quick-add-hint = Type a title, then optionally a day, a time, and “at” a place.
 quick-add-done = Added “{ $summary }”.
 
+## Attendees and availability
+attendees = Attendees
+no-attendees = Nobody yet
+attendee-add = Add someone
+check-availability = Check availability
+checking-availability = Checking…
+availability-free = Free then
+availability-busy = Busy then
+availability-unknown = Would not say
+availability-no-account = This calendar is not on a server, so nobody's availability can be looked up.
+availability-unsupported = This server does not answer availability questions.
+availability-failed = Could not check availability: { $why }
+
 ## Meetings
 join-call = Join call
 

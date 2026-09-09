@@ -71,6 +71,40 @@ pub struct Editor {
     pub picker: widget::calendar::CalendarModel,
     pub picking: Option<DateField>,
     pub error: Option<String>,
+    /// Who is invited. Edited here; written back by `to_event`, which keeps
+    /// each attendee's original line so nothing unmodelled is lost.
+    pub attendees: Vec<crate::model::Attendee>,
+    /// The address being typed into the add field.
+    pub attendee_draft: String,
+    /// What the server last said about the attendees' availability, if asked.
+    pub availability: Option<AvailabilityView>,
+    /// True while a free/busy request is in flight.
+    pub checking_availability: bool,
+}
+
+/// The answer to "when are these people busy", shaped for display.
+#[derive(Clone, Debug)]
+pub enum AvailabilityView {
+    /// The calendar belongs to no account, so there is no server to ask.
+    NoAccount,
+    /// The server runs no scheduling engine. Not the same as everyone free.
+    Unsupported,
+    /// The request failed; the message is the server's or the client's.
+    Failed(String),
+    /// One line per attendee, in the order they were asked about.
+    Answers(Vec<AttendeeAvailability>),
+}
+
+/// One attendee's answer.
+#[derive(Clone, Debug)]
+pub struct AttendeeAvailability {
+    pub email: String,
+    /// `false` when the server declined to say — which must not be drawn as
+    /// free, or the meeting gets booked over someone who simply would not
+    /// answer.
+    pub answered: bool,
+    /// Whether any busy period overlaps the slot that was asked about.
+    pub busy: bool,
 }
 
 /// The zone an [`EventTime`] carries explicitly, when it is worth showing.
@@ -130,6 +164,10 @@ impl Editor {
             picker: to_picker(start.date()),
             picking: None,
             error: None,
+            attendees: Vec::new(),
+            attendee_draft: String::new(),
+            availability: None,
+            checking_availability: false,
         }
     }
 
@@ -234,6 +272,10 @@ impl Editor {
             picker: to_picker(start.date()),
             picking: None,
             error: None,
+            attendees: event.attendees.clone(),
+            attendee_draft: String::new(),
+            availability: None,
+            checking_availability: false,
             original: Some(event.clone()),
         }
     }
@@ -312,6 +354,7 @@ impl Editor {
         event.start = start;
         event.end = end;
         event.rrule = rrule;
+        event.attendees = self.attendees.clone();
         event.last_modified = Some(chrono::Utc::now());
 
         Ok(event)
@@ -352,6 +395,7 @@ impl Editor {
             .push(self.details_section(calendars))
             .push(self.time_section(config))
             .push(self.repeat_section())
+            .push(self.attendees_section())
             .push(self.actions());
 
         widget::scrollable(column).into()
@@ -652,6 +696,101 @@ impl Editor {
             .into()
     }
 
+    /// Who is invited, and — when the calendar's server can answer — whether
+    /// they are free when this event is.
+    fn attendees_section(&self) -> Element<'_, Message> {
+        let spacing = cosmic::theme::spacing();
+        let mut section = widget::settings::section().title(fl!("attendees"));
+
+        for (index, attendee) in self.attendees.iter().enumerate() {
+            let status = self.availability_for(&attendee.email);
+            let mut row = widget::settings::item::builder(attendee.display().to_owned());
+            // The address is worth showing under a display name, since that is
+            // what the server was actually asked about.
+            if attendee.name.is_some() {
+                row = row.description(attendee.email.clone());
+            }
+            if let Some(status) = status {
+                row = row.description(status);
+            }
+            section = section.add(
+                row.control(
+                    widget::button::icon(widget::icon::from_name("list-remove-symbolic"))
+                        .on_press(Message::EditorAttendeeRemove(index)),
+                ),
+            );
+        }
+
+        if self.attendees.is_empty() {
+            section = section.add(
+                widget::settings::item::builder(fl!("no-attendees")).control(widget::Space::new()),
+            );
+        }
+
+        section = section.add(
+            widget::settings::item::builder(fl!("attendee-add")).control(
+                widget::text_input("name@example.com", &self.attendee_draft)
+                    .on_input(Message::EditorAttendeeDraft)
+                    .on_submit(|_| Message::EditorAttendeeAdd)
+                    .width(Length::Fixed(220.0)),
+            ),
+        );
+
+        let mut column = widget::column::with_capacity(3)
+            .spacing(spacing.space_xxs)
+            .push(section);
+
+        if !self.attendees.is_empty() {
+            let label = if self.checking_availability {
+                fl!("checking-availability")
+            } else {
+                fl!("check-availability")
+            };
+            let button = widget::button::standard(label);
+            column = column.push(if self.checking_availability {
+                button
+            } else {
+                button.on_press(Message::EditorCheckAvailability)
+            });
+        }
+
+        // The two answers that are not per-attendee: no server to ask, or a
+        // server that does not do scheduling. Both must read as "unknown",
+        // never as "everyone is free".
+        let note = match &self.availability {
+            Some(AvailabilityView::NoAccount) => Some(fl!("availability-no-account")),
+            Some(AvailabilityView::Unsupported) => Some(fl!("availability-unsupported")),
+            Some(AvailabilityView::Failed(why)) => {
+                Some(fl!("availability-failed", why = why.clone()))
+            }
+            _ => None,
+        };
+        if let Some(note) = note {
+            column = column.push(
+                widget::text::caption(note).wrapping(cosmic::iced::core::text::Wrapping::Word),
+            );
+        }
+
+        column.into()
+    }
+
+    /// One attendee's availability, as a line to sit under their name.
+    fn availability_for(&self, email: &str) -> Option<String> {
+        let Some(AvailabilityView::Answers(answers)) = &self.availability else {
+            return None;
+        };
+        let answer = answers.iter().find(|a| a.email == email)?;
+        Some(if !answer.answered {
+            // The server was asked and would not say. Reporting this as free
+            // is how meetings get booked over people.
+            fl!("availability-unknown")
+        } else if answer.busy {
+            fl!("availability-busy")
+        } else {
+            fl!("availability-free")
+        })
+    }
+
     fn actions(&self) -> Element<'_, Message> {
         let spacing = cosmic::theme::spacing();
 
@@ -773,6 +912,97 @@ mod tests {
 
     fn t(h: u32, m: u32) -> NaiveTime {
         NaiveTime::from_hms_opt(h, m, 0).unwrap()
+    }
+
+    fn with_availability(answers: Vec<AttendeeAvailability>) -> Editor {
+        let mut editor = Editor::new(
+            "personal".into(),
+            NaiveDate::from_ymd_opt(2026, 8, 4)
+                .unwrap()
+                .and_hms_opt(9, 0, 0)
+                .unwrap(),
+            false,
+            chrono::Duration::hours(1),
+        );
+        editor.availability = Some(AvailabilityView::Answers(answers));
+        editor
+    }
+
+    #[test]
+    fn a_server_that_would_not_say_is_never_shown_as_free() {
+        // The whole reason `answered` exists: an unanswered attendee comes
+        // back with an empty busy list, and calling that free books the
+        // meeting over someone who simply did not reply.
+        let editor = with_availability(vec![AttendeeAvailability {
+            email: "bob@example.com".into(),
+            answered: false,
+            busy: false,
+        }]);
+        let shown = editor.availability_for("bob@example.com").unwrap();
+        assert_ne!(shown, fl!("availability-free"));
+        assert_eq!(shown, fl!("availability-unknown"));
+    }
+
+    #[test]
+    fn an_answered_attendee_reads_free_or_busy() {
+        let editor = with_availability(vec![
+            AttendeeAvailability {
+                email: "free@example.com".into(),
+                answered: true,
+                busy: false,
+            },
+            AttendeeAvailability {
+                email: "busy@example.com".into(),
+                answered: true,
+                busy: true,
+            },
+        ]);
+        assert_eq!(
+            editor.availability_for("free@example.com").unwrap(),
+            fl!("availability-free")
+        );
+        assert_eq!(
+            editor.availability_for("busy@example.com").unwrap(),
+            fl!("availability-busy")
+        );
+    }
+
+    #[test]
+    fn an_attendee_nobody_asked_about_shows_nothing() {
+        let editor = with_availability(Vec::new());
+        assert!(editor.availability_for("stranger@example.com").is_none());
+    }
+
+    #[test]
+    fn attendees_survive_the_editor_round_trip() {
+        let mut event = Event::draft(
+            "personal",
+            NaiveDate::from_ymd_opt(2026, 8, 4)
+                .unwrap()
+                .and_hms_opt(9, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        );
+        event.summary = "Planning".into();
+        event.attendees = vec![crate::model::Attendee {
+            email: "bob@example.com".into(),
+            name: Some("Bob".into()),
+            partstat: Some("ACCEPTED".into()),
+            raw: Some("ATTENDEE;CN=Bob;PARTSTAT=ACCEPTED:mailto:bob@example.com".into()),
+        }];
+
+        let mut editor = Editor::from_event(&event, chrono_tz::UTC);
+        assert_eq!(editor.attendees.len(), 1);
+        editor.summary = "Planning (renamed)".into();
+
+        let saved = editor.to_event(chrono_tz::UTC).unwrap();
+        assert_eq!(saved.attendees.len(), 1, "the editor dropped the attendee");
+        // The source line rides along, so PARTSTAT and any unmodelled
+        // parameter survive an edit made here.
+        assert_eq!(
+            saved.attendees[0].raw.as_deref(),
+            Some("ATTENDEE;CN=Bob;PARTSTAT=ACCEPTED:mailto:bob@example.com")
+        );
     }
 
     #[test]

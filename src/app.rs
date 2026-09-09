@@ -293,6 +293,12 @@ pub enum Message {
     EditorDatePicked(jiff::civil::Date),
     EditorPickerPrev,
     EditorPickerNext,
+    EditorAttendeeDraft(String),
+    EditorAttendeeAdd,
+    EditorAttendeeRemove(usize),
+    /// Ask the calendar's server when the attendees are busy.
+    EditorCheckAvailability,
+    AvailabilityAnswer(crate::ui::editor::AvailabilityView),
     EditorSave,
     EditorCancel,
     EditorDelete,
@@ -632,6 +638,16 @@ enum GridDrag {
         current: NaiveDateTime,
         moved: bool,
     },
+}
+
+/// Whether any of `busy` overlaps the half-open slot `[from_ms, to_ms)`.
+///
+/// Half-open on purpose: a meeting that ends exactly when this one starts does
+/// not conflict with it, and neither does one that starts exactly when this one
+/// ends. Treating a touch as a clash would mark every back-to-back day busy.
+fn overlaps_slot(busy: &[cosmic_pim_caldav::itip::BusyPeriod], from_ms: i64, to_ms: i64) -> bool {
+    busy.iter()
+        .any(|period| period.start_ms < to_ms && period.end_ms > from_ms)
 }
 
 /// Identifies the quick-add input so opening the dialog can focus it.
@@ -1885,6 +1901,30 @@ impl cosmic::Application for AppModel {
                 e.tz_picking = None;
                 e.tz_query.clear();
             }),
+            Message::EditorAttendeeDraft(v) => self.with_editor(|e| e.attendee_draft = v),
+            Message::EditorAttendeeAdd => self.with_editor(|e| {
+                let email = crate::model::normalise_address(&e.attendee_draft);
+                // An address needs an @ to be worth sending to a server; the
+                // rest of the validation is the server's job, not ours.
+                if email.contains('@') && !e.attendees.iter().any(|a| a.email == email) {
+                    e.attendees.push(crate::model::Attendee::new(&email, None));
+                    // The answer on screen no longer covers everyone.
+                    e.availability = None;
+                }
+                e.attendee_draft.clear();
+            }),
+            Message::EditorAttendeeRemove(index) => self.with_editor(|e| {
+                if index < e.attendees.len() {
+                    e.attendees.remove(index);
+                    e.availability = None;
+                }
+            }),
+            Message::EditorCheckAvailability => return self.check_availability(),
+            Message::AvailabilityAnswer(view) => self.with_editor(|e| {
+                e.checking_availability = false;
+                e.availability = Some(view);
+            }),
+
             Message::EditorSummary(v) => self.with_editor(|e| e.summary = v),
             Message::EditorLocation(v) => self.with_editor(|e| e.location = v),
             Message::EditorDescription(v) => self.with_editor(|e| e.description = v),
@@ -3917,6 +3957,92 @@ impl AppModel {
         )
     }
 
+    /// Asks the calendar's account when the attendees are busy during this
+    /// event's slot.
+    ///
+    /// Off the update loop: it is a DAV round trip to somebody else's server.
+    /// Everything that can go wrong — no account behind this calendar, a
+    /// server with no scheduling engine, a refusal — comes back as a state the
+    /// editor renders as "unknown", because the one answer that must never be
+    /// invented is "free".
+    fn check_availability(&mut self) -> Task<cosmic::Action<Message>> {
+        let Some(editor) = self.editor.as_ref() else {
+            return Task::none();
+        };
+        let Some(local) = self.store.as_ref().map(Store::local_timezone) else {
+            return Task::none();
+        };
+        let attendees: Vec<String> = editor.attendees.iter().map(|a| a.email.clone()).collect();
+        if attendees.is_empty() {
+            return Task::none();
+        }
+
+        // The slot to ask about is the one the editor currently shows, not the
+        // one on disk: the point is to check before committing.
+        let Ok(event) = editor.to_event(local) else {
+            return Task::none();
+        };
+        let from_ms = event.start.to_utc(local).timestamp_millis();
+        let to_ms = event.end.to_utc(local).timestamp_millis();
+        let calendar_id = editor.calendar_id.clone();
+
+        let account_id = self
+            .accounts
+            .as_ref()
+            .and_then(|accounts| cosmic_pim_sync::account_for_collection(accounts, &calendar_id));
+        let Some(account_id) = account_id else {
+            return <Self as cosmic::Application>::update(
+                self,
+                Message::AvailabilityAnswer(crate::ui::editor::AvailabilityView::NoAccount),
+            );
+        };
+
+        self.with_editor(|e| {
+            e.checking_availability = true;
+            e.availability = None;
+        });
+        let registry = cosmic_pim_accounts::Registry::load();
+
+        cosmic::task::future(async move {
+            let view = tokio::task::spawn_blocking(move || {
+                use crate::ui::editor::{AttendeeAvailability, AvailabilityView};
+
+                // Reopened here rather than shared: the store is not `Send`,
+                // and resolving may renew and persist an OAuth token.
+                let mut accounts = match cosmic_pim_accounts::AccountStore::open_default() {
+                    Ok(accounts) => accounts,
+                    Err(why) => return AvailabilityView::Failed(why.to_string()),
+                };
+
+                match cosmic_pim_sync::availability(
+                    &mut accounts,
+                    &registry,
+                    &account_id,
+                    &attendees,
+                    from_ms,
+                    to_ms,
+                ) {
+                    Ok(cosmic_pim_sync::Answer::Unsupported) => AvailabilityView::Unsupported,
+                    Ok(cosmic_pim_sync::Answer::Answers(answers)) => AvailabilityView::Answers(
+                        answers
+                            .into_iter()
+                            .map(|answer| AttendeeAvailability {
+                                busy: overlaps_slot(&answer.busy, from_ms, to_ms),
+                                answered: answer.answered(),
+                                email: answer.attendee,
+                            })
+                            .collect(),
+                    ),
+                    Err(why) => AvailabilityView::Failed(why.to_string()),
+                }
+            })
+            .await
+            .unwrap_or_else(|why| crate::ui::editor::AvailabilityView::Failed(why.to_string()));
+
+            Message::AvailabilityAnswer(view)
+        })
+    }
+
     fn with_editor(&mut self, f: impl FnOnce(&mut Editor)) {
         if let Some(editor) = self.editor.as_mut() {
             f(editor);
@@ -4786,6 +4912,37 @@ mod tests {
             Duration::hours(1),
             "duration changed while moving"
         );
+    }
+
+    fn busy(start_ms: i64, end_ms: i64) -> cosmic_pim_caldav::itip::BusyPeriod {
+        cosmic_pim_caldav::itip::BusyPeriod {
+            start_ms,
+            end_ms,
+            kind: "BUSY".into(),
+        }
+    }
+
+    #[test]
+    fn a_meeting_that_merely_touches_the_slot_does_not_clash() {
+        // 09:00–10:00 against a slot of 10:00–11:00.
+        let slot = (10_000, 11_000);
+        assert!(!overlaps_slot(&[busy(9_000, 10_000)], slot.0, slot.1));
+        assert!(!overlaps_slot(&[busy(11_000, 12_000)], slot.0, slot.1));
+    }
+
+    #[test]
+    fn a_real_overlap_clashes() {
+        let slot = (10_000, 11_000);
+        assert!(overlaps_slot(&[busy(10_500, 12_000)], slot.0, slot.1));
+        assert!(overlaps_slot(&[busy(9_000, 10_500)], slot.0, slot.1));
+        // Wholly containing the slot, and wholly inside it.
+        assert!(overlaps_slot(&[busy(8_000, 13_000)], slot.0, slot.1));
+        assert!(overlaps_slot(&[busy(10_200, 10_800)], slot.0, slot.1));
+    }
+
+    #[test]
+    fn no_busy_periods_is_free() {
+        assert!(!overlaps_slot(&[], 10_000, 11_000));
     }
 
     #[test]

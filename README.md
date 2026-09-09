@@ -63,6 +63,10 @@ is the canonical description of how the layers fit and where new code belongs.
 - **Subscribe to calendar feeds** by URL (`webcal:`/`https:`), refreshed on their own schedule
   and marked read-only, so a public holiday calendar cannot be edited by accident.
 - **Sync conflicts are resolvable in-app**, per field where the history allows it.
+- **Attendees and availability.** An event carries who is invited; where the server
+  answers RFC 6638 free/busy, the editor says who is busy during the slot — and
+  distinguishes "would not say" from "free", so a meeting is never booked over
+  someone on the strength of a non-answer.
 - **Picks up external changes.** A debounced filesystem watch means a `vdirsyncer` run or an edit
   in another app shows up without a restart.
 - **Reminders** as desktop notifications, honouring each event's own `VALARM`,

@@ -7,6 +7,12 @@ All notable user-facing changes to Slate. The format follows
 
 ### Added
 
+- Attendees on events, with availability. An event now carries who is invited
+  and who called it; the editor lists them, adds and removes them, and — where
+  the calendar's server answers RFC 6638 free/busy — says who is free during
+  the slot. A server that declines to answer is reported as "would not say",
+  never as free.
+
 - A year view: twelve mini months with each day tinted by how busy it is, for
   the "when am I free in March" question the other views answer badly. `Ctrl+5`;
   the task list moves to `Ctrl+6`.
@@ -96,6 +102,15 @@ All notable user-facing changes to Slate. The format follows
   asks for this occurrence, this and following, or the whole series. Opening
   an occurrence now shows that occurrence's own dates rather than the series'
   first ones.
+
+- Events no longer lose what Slate does not display. Saving an event used to
+  drop every property this app does not model — its attendees, its organizer,
+  `STATUS`, `TRANSP`, `CLASS`, `PRIORITY`, `URL`, `CATEGORIES` and any `X-`
+  property — so editing an invitation quietly discarded the invitation. All of
+  it now survives a round trip, including parameters on the attendee lines.
+- The sidebar scrolls. On a short window the calendar list sat below the
+  bottom edge, taking every visibility toggle and the "new calendar" button
+  with it.
 
 ### Fixed
 

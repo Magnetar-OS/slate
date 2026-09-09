@@ -164,10 +164,11 @@ because Envelope is in the family.
       one occurrence vs the series handled distinctly.
 - [x] Degrades to "import this .ics" without Envelope — the contract stays minimal so that
       remains true.
-- [~] After receive-side is solid: organizer send-side, then RFC 6638 free/busy. The
-      substrate side of both is complete (`itip::with_method`, `send_invitation`,
-      `send_cancellation`, `query_availability`); the app side is blocked on the
-      event model having no attendees at all — see the note under Risks.
+- [x] After receive-side is solid: organizer send-side, then RFC 6638 free/busy.
+      Free/busy is in: events carry attendees and an organizer, the editor edits
+      them, and `cosmic_pim_sync::availability` asks the calendar's own account.
+      Organizer send-side remains — the substrate half (`itip::with_method`,
+      `send_invitation`, `send_cancellation`) is there, unused by the app.
 
 *Exit: a Google-sent invite lands in Envelope, is accepted in Slate, and the organizer sees the
 acceptance; a rescheduled single occurrence updates the right instance.*
@@ -176,11 +177,11 @@ acceptance; a rescheduled single occurrence updates the right instance.*
 
 - [ ] Flathub submission + distro packaging out of `packaging/`; release automation already
       scaffolded in `release.config.json`.
-- [~] AppStream metadata at Flathub quality: release notes, OARS, branding, and
-      `<supports>` are in and validate. Screenshots are the one gap — they must be
-      captured on a clean session, since a shot carries whatever is behind the
-      window into a public listing. The block is ready to uncomment in the
-      metainfo, with the four wanted shots named.
+- [x] AppStream metadata at Flathub quality: release notes, OARS, branding,
+      `<supports>`, and four screenshots, all validating. `packaging/screenshots.sh`
+      regenerates the shots inside a nested compositor against a generated
+      calendar, so a capture can never carry the machine it was taken on into a
+      public listing.
 - [x] Accessibility audit: keyboard traversal fixed everywhere it was broken —
       grid blocks, agenda rows, search results, and year days are focusable and
       open with Enter — and every icon-only button now carries a name. No
@@ -268,12 +269,14 @@ internal compatibility layers; no second sync engine; no UI-side workarounds for
 
 ## Risks
 
-- **Free/busy is blocked on the event model, not on the protocol.** The substrate
-  can already ask a server when an attendee is busy, but `Event` carries no
-  attendees or organizer at all — the iMIP path works on raw ICS text. Free/busy
-  therefore needs, in order: `ATTENDEE`/`ORGANIZER` parsed into the model with
-  their parameters preserved, an attendee editor, and only then the availability
-  display. The first is substrate work.
+- **Writing an event still re-serialises it from the model.** Unmodelled
+  properties are now carried verbatim in `Event::other`, which stopped the
+  data loss, but that is a mitigation rather than the fix: parameters on
+  properties that *are* modelled (`SUMMARY;LANGUAGE=en-us`) are still dropped,
+  because those never reach `other`. Contacts do not have this problem —
+  `vcard.rs` edits through the patcher, naming only the fields that changed.
+  Moving the calendar write path onto `patch_nth_component` the same way would
+  remove both the residue and the field.
 - **Read-side `RECURRENCE-ID` status** is the unknown that can reorder M1 — hence M0.
 - **Time-grid performance under iced/wgpu** is the biggest UI unknown; the M0 baseline exists so
   M4 is built on measurements, not optimism.

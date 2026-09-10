@@ -134,6 +134,7 @@ impl<'a> Sidebar<'a> {
                 Message::ToggleCalendar(calendar.id.clone()),
             )
         }))
+        .into()
     }
 
     fn calendar_row(&self, calendar: &'a CalendarMeta) -> Element<'a, Message> {

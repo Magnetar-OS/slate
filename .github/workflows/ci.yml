@@ -39,19 +39,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The substrate is a path dependency and lives in its own repository, so
-      # it has to be checked out beside this one for anything to build. Kept as
-      # a sibling directory because that is what Cargo.toml's `../cosmic-pim`
-      # resolves to.
-      - name: Check out the shared substrate
-        uses: actions/checkout@v5
-        with:
-          repository: Magnetar-OS/cosmic-pim
-          path: cosmic-pim-checkout
-
-      - name: Place the substrate where Cargo.toml expects it
-        run: mv cosmic-pim-checkout ../cosmic-pim
-
       # libcosmic pulls in the Wayland, XKB, and OpenSSL stacks.
       - name: Install build dependencies
         run: |

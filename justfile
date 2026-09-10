@@ -84,8 +84,10 @@ check-json: (check '--message-format=json')
 
 # Checks formatting without rewriting anything
 #
-# Scoped to this package: `--all` would reach through the path dependency and
-# reformat the cosmic-pim checkout, which is a different repository.
+# Scoped to this package. The substrate resolves from crates.io now, so `--all`
+# no longer reaches into a sibling checkout, but naming the package keeps that
+# true if the `[patch]` block is ever uncommented for local work — which would
+# put another repository's working tree back in this workspace.
 fmt-check:
     cargo fmt -p slate -- --check
 

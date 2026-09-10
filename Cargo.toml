@@ -9,44 +9,43 @@ license = "GPL-3.0-only"
 description = "Slate — a calendar and task list for the COSMIC desktop"
 repository = "https://github.com/Magnetar-OS/slate"
 rust-version = "1.98.0"
+# Not on crates.io: this application links libcosmic and cosmic-ext-widgets,
+# both of which are git dependencies, and crates.io refuses any crate that
+# carries one. Slate ships as a distribution package, not as a crate.
+publish = false
 
 [dependencies]
 # --- the shared PIM substrate (MPL-2.0), from its own repository ---
 # `model`, `store`, and `atomic` are re-exported from lib.rs, so in-app paths
 # stay `crate::model::…` / `crate::store::…`.
 #
-# PATHS FOR NOW, versions once cosmic-pim is published. A `git` dependency
-# cannot resolve against a repository that does not exist yet, and a `[patch]`
-# does not save you — cargo still fetches the patched source to resolve it.
+# Version dependencies: cosmic-pim 1.0.0 is on crates.io, so these resolve
+# from the registry and the app no longer needs a sibling checkout to build.
 #
 # The licence gate is open: Meltemi grants MPL-2.0 (Exhibit A only) on each
-# donor file, naming these derivatives, in its own LICENSING.md. What is left
-# before these become version dependencies is mechanical — push cosmic-pim and
-# publish it. Swap to this once that is done:
+# donor file, naming these derivatives, in its own LICENSING.md.
 #
-#   cosmic-pim-core     = "0.1"
-#   cosmic-pim-accounts = "0.1"
-#   cosmic-pim-sync     = "0.1"
-#   cosmic-pim-caldav   = "0.1"
-#
-# …keeping a commented `[patch]` at the bottom of this file for local work.
-cosmic-pim-core = { path = "../cosmic-pim/crates/cosmic-pim-core" }
+# For local work against the sibling checkout, uncomment the
+# `[patch.crates-io]` block at the bottom of this file — do not reintroduce
+# paths here, or a release build would silently prefer the working tree.
+cosmic-pim-core = "1.0.0"
 # Accounts, credentials, and the CalDAV sync cycle. Used by the daemon (which
 # runs sync on a timer) and by the app's settings UI.
-cosmic-pim-accounts = { path = "../cosmic-pim/crates/cosmic-pim-accounts" }
-cosmic-pim-sync = { path = "../cosmic-pim/crates/cosmic-pim-sync" }
+cosmic-pim-accounts = "1.0.0"
+cosmic-pim-sync = "1.0.0"
 # ICS feed subscriptions. Used directly by the daemon, which drives feed
 # refreshes on its sync tick — the account-based sync engine deliberately does
 # not schedule them, because a feed is a URL, not an account.
-cosmic-pim-caldav = { path = "../cosmic-pim/crates/cosmic-pim-caldav" }
+cosmic-pim-caldav = "1.0.0"
 
 # --- COSMIC / UI ---
 # Animated sidebar collapse and the icon-only rail — neither exists in
-# libcosmic. Path for now, git tag once pushed — a tag rather than a version,
-# because this crate depends on libcosmic, libcosmic is not on crates.io, and
-# crates.io refuses any crate carrying a git dependency. That is not a state we
-# can fix from here; it stays a git dependency until pop-os publishes.
-cosmic-ext-widgets = { path = "../cosmic-ext-widgets" }
+# libcosmic. A git tag rather than a version, because this crate depends on
+# libcosmic, libcosmic is not on crates.io, and crates.io refuses any crate
+# carrying a git dependency. That is not a state we can fix from here; it stays
+# a git dependency until pop-os publishes. Uncomment the [patch] at the bottom
+# of this file to build it from a local clone instead.
+cosmic-ext-widgets = { git = "https://github.com/Magnetar-OS/cosmic-ext-widgets.git", tag = "v1.0.0" }
 i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
 i18n-embed-fl = "0.10"
 rust-embed = "8.12"

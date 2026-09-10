@@ -1,6 +1,6 @@
 [package]
 name = "slate"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 # GPL-3.0-only applies to THIS package — the Slate application. The shared
 # substrate (cosmic-pim) is MPL-2.0 and is linked, not absorbed. See

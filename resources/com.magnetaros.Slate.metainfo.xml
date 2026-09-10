@@ -64,7 +64,7 @@
       <caption>The agenda view</caption>
     </screenshot>
   </screenshots>
-  <icon type="remote" width="64" height="64" scale="1">https://raw.githubusercontent.com/Magnetar-OS/slate/main/resources/icons/hicolor/scalable/apps/icon.svg</icon>
+  <icon type="remote" width="64" height="64" scale="1">https://raw.githubusercontent.com/Magnetar-OS/slate/main/resources/icons/hicolor/scalable/apps/com.magnetaros.Slate.svg</icon>
 
   <!-- How the COSMIC App Library and store recognise a COSMIC application, and
        which binary and file types this component actually provides. -->
@@ -99,10 +99,10 @@
 
   <content_rating type="oars-1.1"/>
 
-  <!-- The blue of the app icon; software centres tint the page header with it. -->
+  <!-- The indigo of the app icon; software centres tint the page header with it. -->
   <branding>
-    <color type="primary" scheme_preference="light">#2d7dd2</color>
-    <color type="primary" scheme_preference="dark">#1c5fa8</color>
+    <color type="primary" scheme_preference="light">#5b7cff</color>
+    <color type="primary" scheme_preference="dark">#2e45c4</color>
   </branding>
 
   <releases>

@@ -61,8 +61,13 @@ modules:
         /app/share/applications/com.magnetaros.Slate.desktop
       - install -Dm0644 resources/com.magnetaros.Slate.metainfo.xml
         /app/share/metainfo/com.magnetaros.Slate.metainfo.xml
-      - install -Dm0644 resources/icons/hicolor/scalable/apps/icon.svg
+      - install -Dm0644 resources/icons/hicolor/scalable/apps/com.magnetaros.Slate.svg
         /app/share/icons/hicolor/scalable/apps/com.magnetaros.Slate.svg
+      - install -Dm0644 resources/icons/hicolor/symbolic/apps/com.magnetaros.Slate-symbolic.svg
+        /app/share/icons/hicolor/symbolic/apps/com.magnetaros.Slate-symbolic.svg
+      - for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do install -Dm0644
+        "resources/icons/hicolor/$size/apps/com.magnetaros.Slate.png"
+        "/app/share/icons/hicolor/$size/apps/com.magnetaros.Slate.png"; done
     sources:
       - type: git
         url: https://github.com/Magnetar-OS/slate.git

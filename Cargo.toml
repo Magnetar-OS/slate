@@ -144,3 +144,6 @@ features = [
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[dev-dependencies]
+pop-launcher = "1.2.7"

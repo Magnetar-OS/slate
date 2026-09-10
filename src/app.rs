@@ -69,7 +69,8 @@ thread_local! {
         })
         .collect();
 }
-const APP_ICON: &[u8] = include_bytes!("../resources/icons/hicolor/scalable/apps/com.magnetaros.Slate.svg");
+const APP_ICON: &[u8] =
+    include_bytes!("../resources/icons/hicolor/scalable/apps/com.magnetaros.Slate.svg");
 
 /// The `calendar_id` birthday entries carry. Not a real collection: a
 /// birthday is a fact about a contact, synthesised into the visible days on

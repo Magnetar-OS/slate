@@ -65,7 +65,7 @@ struct Applet {
 #[derive(Clone, Debug)]
 enum Message {
     PopupClosed(Id),
-    Surface(cosmic::surface::Action),
+    Surface(cosmic::surface::Action<Message>),
     Tick,
     FilesChanged,
     UpdateConfig(Config),
@@ -148,9 +148,7 @@ impl cosmic::Application for Applet {
             }
 
             Message::Surface(action) => {
-                return cosmic::task::message(cosmic::Action::Cosmic(
-                    cosmic::app::Action::Surface(action),
-                ));
+                return cosmic::task::message(cosmic::Action::Surface(action));
             }
 
             Message::Tick => {

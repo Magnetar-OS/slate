@@ -5,6 +5,8 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-16
+
 ### Added
 
 - Attendees on events, with availability. An event now carries who is invited
@@ -145,3 +147,6 @@ All notable user-facing changes to Slate. The format follows
 - The reminder daemon's systemd sandbox no longer blocks the sync engine's
   own writes (contacts, accounts, cache index).
 - Keyboard shortcuts work on non-Latin keyboard layouts.
+
+[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/Magnetar-OS/slate/releases/tag/v1.0.1

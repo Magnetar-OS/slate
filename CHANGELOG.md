@@ -7,6 +7,10 @@ All notable user-facing changes to Slate. The format follows
 
 ## [1.1.0] - 2026-09-22
 
+### Changed
+
+- Rebuilt against the current COSMIC libraries (libcosmic `03c8f93`).
+
 ### Fixed
 
 - Menus are laid out like Envelope's: a divider is a thin rule instead of a

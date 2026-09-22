@@ -5,6 +5,12 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Menus are laid out like Envelope's: a divider is a thin rule instead of a
+  full-height empty row, and the menu is wide enough that labels are not cut
+  off and shortcuts have room beside them.
+
 ## [1.0.1] - 2026-09-16
 
 ### Added

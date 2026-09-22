@@ -982,7 +982,12 @@ impl cosmic::Application for AppModel {
                     ],
                 ),
             ),
-        ]);
+        ])
+        // Envelope's menu geometry, for the same reasons: the default
+        // `Uniform(30)` height gives every divider a full row, and the default
+        // 150 width ellipsizes labels and leaves the shortcut column no room.
+        .item_height(menu::ItemHeight::Dynamic(36))
+        .item_width(menu::ItemWidth::Uniform(260));
 
         let spacing = cosmic::theme::spacing();
 

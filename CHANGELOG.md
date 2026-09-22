@@ -5,6 +5,8 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-22
+
 ### Fixed
 
 - Menus are laid out like Envelope's: a divider is a thin rule instead of a
@@ -154,5 +156,6 @@ All notable user-facing changes to Slate. The format follows
   own writes (contacts, accounts, cache index).
 - Keyboard shortcuts work on non-Latin keyboard layouts.
 
-[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Magnetar-OS/slate/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/Magnetar-OS/slate/releases/tag/v1.0.1

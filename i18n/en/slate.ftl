@@ -127,6 +127,18 @@ reminder-hours = { $hours } { $hours ->
        *[other] hours
     } before
 reminder-day-before = 1 day before
+reminder-days = { $days } { $days ->
+        [one] day
+       *[other] days
+    } before
+reminder-at-start = At the start
+reminder-after-start = { $minutes } { $minutes ->
+        [one] minute
+       *[other] minutes
+    } after the start
+event-reminders = Reminders
+event-reminders-default = The calendar's default reminder
+event-reminder-add = Add a reminder
 reminder-now = Starting now
 reminder-in = In { $minutes } { $minutes ->
         [one] minute

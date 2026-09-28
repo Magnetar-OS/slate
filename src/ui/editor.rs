@@ -71,6 +71,9 @@ pub struct Editor {
     pub picker: widget::calendar::CalendarModel,
     pub picking: Option<DateField>,
     pub error: Option<String>,
+    /// The event's own reminders, as offsets from its start (negative is
+    /// before). Empty means the calendar's default reminder applies.
+    pub alarms: Vec<chrono::Duration>,
     /// Who is invited. Edited here; written back by `to_event`, which keeps
     /// each attendee's original line so nothing unmodelled is lost.
     pub attendees: Vec<crate::model::Attendee>,
@@ -146,6 +149,40 @@ fn in_original_form(
     }
 }
 
+/// The reminders the editor offers, as offsets from the event's start.
+///
+/// The presets the common clients share, up to Outlook's longest; anything
+/// else an event already carries is kept and shown as it is.
+pub const ALARM_PRESETS: &[chrono::Duration] = &[
+    chrono::Duration::zero(),
+    chrono::Duration::minutes(-5),
+    chrono::Duration::minutes(-10),
+    chrono::Duration::minutes(-15),
+    chrono::Duration::minutes(-30),
+    chrono::Duration::hours(-1),
+    chrono::Duration::hours(-2),
+    chrono::Duration::days(-1),
+    chrono::Duration::days(-2),
+    chrono::Duration::weeks(-1),
+];
+
+/// "10 minutes before", "1 day before", "At the start".
+#[must_use]
+pub fn alarm_label(offset: chrono::Duration) -> String {
+    let lead = -offset;
+    if lead == chrono::Duration::zero() {
+        fl!("reminder-at-start")
+    } else if lead < chrono::Duration::zero() {
+        fl!("reminder-after-start", minutes = (-lead).num_minutes())
+    } else if lead.num_seconds() % 86_400 == 0 {
+        fl!("reminder-days", days = lead.num_days())
+    } else if lead.num_seconds() % 3_600 == 0 {
+        fl!("reminder-hours", hours = lead.num_hours())
+    } else {
+        fl!("reminder-minutes", minutes = lead.num_minutes())
+    }
+}
+
 /// Wall clock of `time` in `zone`. All-day and floating values are already
 /// wall clock; zoned ones convert through their instant.
 fn wall_in(time: EventTime, zone: Tz, local: Tz) -> NaiveDateTime {
@@ -191,6 +228,7 @@ impl Editor {
             picker: to_picker(start.date()),
             picking: None,
             error: None,
+            alarms: Vec::new(),
             attendees: Vec::new(),
             attendee_draft: String::new(),
             availability: None,
@@ -299,6 +337,7 @@ impl Editor {
             picker: to_picker(start.date()),
             picking: None,
             error: None,
+            alarms: event.alarms.clone(),
             attendees: event.attendees.clone(),
             attendee_draft: String::new(),
             availability: None,
@@ -405,6 +444,7 @@ impl Editor {
         event.end = end;
         event.rrule = rrule;
         event.attendees = self.attendees.clone();
+        event.alarms = self.alarms.clone();
         event.last_modified = Some(chrono::Utc::now());
 
         Ok(event)
@@ -445,6 +485,7 @@ impl Editor {
             .push(self.details_section(calendars))
             .push(self.time_section(config))
             .push(self.repeat_section())
+            .push(self.reminders_section())
             .push(self.attendees_section())
             .push(self.actions());
 
@@ -655,6 +696,46 @@ impl Editor {
         self.original
             .as_ref()
             .is_some_and(|event| event.recurrence_id.is_some())
+    }
+
+    /// Adds the preset at `index` in [`ALARM_PRESETS`], once.
+    pub fn add_alarm(&mut self, index: usize) {
+        if let Some(offset) = ALARM_PRESETS.get(index).copied()
+            && !self.alarms.contains(&offset)
+        {
+            self.alarms.push(offset);
+            // Earliest first, the order they will fire in.
+            self.alarms.sort();
+        }
+    }
+
+    pub fn remove_alarm(&mut self, index: usize) {
+        if index < self.alarms.len() {
+            self.alarms.remove(index);
+        }
+    }
+
+    fn reminders_section(&self) -> Element<'_, Message> {
+        let mut section = widget::settings::section().title(fl!("event-reminders"));
+        if self.alarms.is_empty() {
+            section = section.add(widget::text::caption(fl!("event-reminders-default")));
+        }
+        for (index, offset) in self.alarms.iter().enumerate() {
+            section = section.add(
+                widget::settings::item::builder(alarm_label(*offset)).control(
+                    widget::button::text(fl!("remove")).on_press(Message::EditorAlarmRemove(index)),
+                ),
+            );
+        }
+        let presets: Vec<String> = ALARM_PRESETS.iter().map(|o| alarm_label(*o)).collect();
+        section
+            .add(
+                widget::settings::item::builder(fl!("event-reminder-add")).control(
+                    widget::dropdown(presets, None, Message::EditorAlarmAdd)
+                        .width(Length::Fixed(220.0)),
+                ),
+            )
+            .into()
     }
 
     fn repeat_section(&self) -> Element<'_, Message> {
@@ -1197,6 +1278,37 @@ mod tests {
             "editing the title destroyed the recurrence rule"
         );
         assert_eq!(saved.summary, "Renamed standup");
+    }
+
+    #[test]
+    fn reminders_are_edited_and_saved() {
+        let athens = chrono_tz::Europe::Athens;
+        let nine = NaiveDate::from_ymd_opt(2026, 8, 4)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap();
+        let mut event = Event::draft("personal", nine, athens);
+        event.summary = "Dentist".into();
+        event.alarms = vec![chrono::Duration::minutes(-10)];
+
+        let mut editor = Editor::from_event(&event, athens);
+        // A day before, then the same again, which is not added twice.
+        let day = ALARM_PRESETS
+            .iter()
+            .position(|o| *o == chrono::Duration::days(-1))
+            .unwrap();
+        editor.add_alarm(day);
+        editor.add_alarm(day);
+        assert_eq!(
+            editor.to_event(athens).unwrap().alarms,
+            vec![chrono::Duration::days(-1), chrono::Duration::minutes(-10)]
+        );
+
+        editor.remove_alarm(1);
+        assert_eq!(
+            editor.to_event(athens).unwrap().alarms,
+            vec![chrono::Duration::days(-1)]
+        );
     }
 
     #[test]

@@ -302,6 +302,10 @@ pub enum Message {
     EditorStartTime(String),
     EditorEndTime(String),
     EditorFreq(usize),
+    /// Adds the reminder preset at this index in `ALARM_PRESETS`.
+    EditorAlarmAdd(usize),
+    /// Removes the event's reminder at this index.
+    EditorAlarmRemove(usize),
     EditorInterval(String),
     EditorRepeatEnd(usize),
     EditorCount(String),
@@ -2169,6 +2173,8 @@ impl cosmic::Application for AppModel {
                 }
             }
 
+            Message::EditorAlarmAdd(index) => self.with_editor(|e| e.add_alarm(index)),
+            Message::EditorAlarmRemove(index) => self.with_editor(|e| e.remove_alarm(index)),
             Message::EditorFreq(index) => {
                 let freq = crate::model::Freq::ALL.get(index).copied();
                 if let Some(freq) = freq {

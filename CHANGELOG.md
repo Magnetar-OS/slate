@@ -8,6 +8,8 @@ All notable user-facing changes to Slate. The format follows
 ### Added
 
 - Rename, recolour and delete calendars kept on this computer, in Settings.
+- Reminders in the event editor: add them from presets, from the start of the
+  event up to a week before, or remove them.
 
 ### Changed
 

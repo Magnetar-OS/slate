@@ -4532,53 +4532,63 @@ impl AppModel {
                 .and_then(|_| store.save(&series))
         };
 
-        match result {
-            Ok(()) => {
-                // Two files changed: the truncated master and the successor.
-                let queued = queue_writeback_file(
-                    &master.calendar_id,
-                    &master.file_name,
-                    master_base.as_deref(),
-                )
-                .and(queue_writeback_file(
-                    &series.calendar_id,
-                    &series.file_name,
+        // The split landed whatever happens to the edit on top of it: the
+        // truncated master and the successor are both on disk, so both go to
+        // the server and both undo as one step — a failed save of the edit
+        // below must not leave a split the server never hears of and undo
+        // cannot reach.
+        let mut queued = queue_writeback_file(
+            &master.calendar_id,
+            &master.file_name,
+            master_base.as_deref(),
+        );
+        // The successor, wherever it landed: the series' calendar, or the one
+        // the editor moved it to.
+        let mut journal = vec![
+            crate::undo::Entry {
+                calendar_id: master.calendar_id.clone(),
+                file_name: master.file_name.clone(),
+                before: master_base,
+                after: None,
+            },
+            crate::undo::Entry {
+                calendar_id: master.calendar_id.clone(),
+                file_name: successor.file_name.clone(),
+                before: None,
+                after: None,
+            },
+        ];
+        if series.calendar_id != master.calendar_id {
+            journal.push(crate::undo::Entry {
+                calendar_id: series.calendar_id.clone(),
+                file_name: series.file_name.clone(),
+                before: None,
+                after: None,
+            });
+        }
+        if let Some(store) = self.store.as_ref() {
+            for entry in &journal[1..] {
+                queued = queued.and(queue_writeback_removal(
+                    store,
+                    &entry.calendar_id,
+                    &entry.file_name,
                     None,
                 ));
+            }
+        }
+        self.journal_finish(journal);
+        self.reload();
 
-                // One undo step for the whole split: the master's pre-split
-                // bytes come back, the successor file (wherever it landed)
-                // goes away.
-                let mut journal = vec![
-                    crate::undo::Entry {
-                        calendar_id: master.calendar_id.clone(),
-                        file_name: master.file_name.clone(),
-                        before: master_base,
-                        after: None,
-                    },
-                    crate::undo::Entry {
-                        calendar_id: series.calendar_id.clone(),
-                        file_name: series.file_name.clone(),
-                        before: None,
-                        after: None,
-                    },
-                ];
-                if series.calendar_id != master.calendar_id {
-                    journal.push(crate::undo::Entry {
-                        calendar_id: master.calendar_id.clone(),
-                        file_name: series.file_name.clone(),
-                        before: None,
-                        after: None,
-                    });
-                }
-                self.journal_finish(journal);
-
+        match result {
+            Ok(()) => {
                 self.editor = None;
                 self.core.window.show_context = false;
-                self.reload();
                 self.report_unqueued(queued)
             }
-            Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
+            Err(why) => {
+                let failed = self.toast_error(&format!("{}: {why}", fl!("error-save-event")));
+                Task::batch([failed, self.report_unqueued(queued)])
+            }
         }
     }
 

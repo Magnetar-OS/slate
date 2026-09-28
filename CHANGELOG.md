@@ -74,6 +74,8 @@ All notable user-facing changes to Slate. The format follows
 - Undo and redo refuse, with a message, when the event has changed since
   (for example by a sync) instead of overwriting that change, and say when
   only part of a change could be restored.
+- If saving a "this and following" edit fails after the series was split, the
+  split still reaches the server and can be undone.
 
 ## [1.1.0] - 2026-09-22
 

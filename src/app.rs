@@ -4759,12 +4759,21 @@ impl AppModel {
                 self.toast_error(&fl!("import-empty", path = file_label(path)))
             }
             Ok(summary) => {
+                // Imported events are local changes like any other: into a
+                // CalDAV-bound calendar they must be queued, or the server
+                // never sees them and the next sync treats them as strays.
+                let queued = summary
+                    .files
+                    .iter()
+                    .map(|file| queue_writeback_file(&calendar_id, file, None))
+                    .fold(Ok(()), Result::and);
                 self.reload();
-                self.toast(&fl!(
+                let done = self.toast(&fl!(
                     "import-done",
                     added = summary.added.to_string(),
                     updated = summary.updated.to_string()
-                ))
+                ));
+                Task::batch([done, self.report_unqueued(queued)])
             }
             Err(why) => self.toast_error(&why.to_string()),
         }

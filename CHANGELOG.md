@@ -82,6 +82,7 @@ All notable user-facing changes to Slate. The format follows
   to or from summer time.
 - Quick add gives an event without an end time its calendar's default length,
   as the editor does, instead of always an hour.
+- Events imported into a synced calendar are uploaded to its server.
 
 ## [1.1.0] - 2026-09-22
 

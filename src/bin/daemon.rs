@@ -13,14 +13,16 @@
 //!
 //! Sync must happen whether or not anyone has the window open, and it must not
 //! happen twice at once. Both fall out of the daemon already owning a D-Bus
-//! name: whoever holds it is the single writer, and the app defers to it.
+//! name: whoever holds it runs every sync pass, one at a time, and serves
+//! [`slate::background::Service`] on it so the app's "Sync now" asks the
+//! daemon instead of starting a second pass of its own.
 //!
 //! It claims [`OWNER_BUS_NAME`](slate::reminders::OWNER_BUS_NAME) on
 //! startup. The app follows that name for as long as it runs and suppresses its
 //! own reminders exactly while it is held, so having both running does not
 //! double every notification, and the daemon stopping does not silence them.
 
-use cosmic_pim_accounts::AccountStore;
+use slate::background;
 use slate::clock::{follow_timezone, now_in};
 use slate::config::Config;
 use slate::reminders::{self, Scheduler, SleepWindow};
@@ -55,23 +57,20 @@ async fn main() -> std::process::ExitCode {
     // out in English while the same reminder from the app is translated.
     slate::i18n::init(&i18n_embed::DesktopLanguageRequester::requested_languages());
 
+    // Held while a sync or feed pass runs, whoever started it: the timer
+    // below, or the app over the bus.
+    let running = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+
     // Held for the lifetime of the process: dropping it releases the name and
     // would silently hand reminders back to the app.
-    let session = match zbus::Connection::session().await {
-        Ok(connection) => connection,
-        Err(why) => {
-            tracing::error!(%why, "cannot reach the session bus");
-            return std::process::ExitCode::FAILURE;
-        }
-    };
-    let _connection = match reminders::claim_ownership(session).await {
+    let _connection = match become_owner(running.clone()).await {
         Ok(Some(connection)) => connection,
         Ok(None) => {
             tracing::info!("another process already owns reminders; exiting");
             return std::process::ExitCode::SUCCESS;
         }
         Err(why) => {
-            tracing::error!(%why, "cannot claim the reminder name");
+            tracing::error!(%why, "cannot claim the reminder name on the session bus");
             return std::process::ExitCode::FAILURE;
         }
     };
@@ -122,6 +121,8 @@ async fn main() -> std::process::ExitCode {
     tracing::info!(root = %store.root().display(), "watching for reminders");
 
     let mut shutdown = signals();
+    // A background pass reporting that something landed on disk.
+    let (landed_tx, mut landed_rx) = tokio::sync::mpsc::channel::<()>(1);
 
     loop {
         tokio::select! {
@@ -145,10 +146,9 @@ async fn main() -> std::process::ExitCode {
                 report_missed(&mut store, &mut scheduler, sleep.woke()).await;
                 sleep.swept(check(&mut store, &mut scheduler));
             }
-            _ = sync_ticker.tick() => {
-                let synced = sync_once().await;
-                let fed = refresh_feeds().await;
-                if (synced || fed) && let Err(why) = store.refresh() {
+            _ = sync_ticker.tick() => spawn_background_pass(&running, landed_tx.clone()),
+            Some(()) = landed_rx.recv() => {
+                if let Err(why) = store.refresh() {
                     tracing::warn!(%why, "refresh after a sync failed");
                 }
             }
@@ -166,107 +166,63 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
-/// Runs one CalDAV sync pass. Returns whether anything landed on disk.
-///
-/// The whole pass runs on the blocking pool: the CalDAV client is synchronous
-/// by design, and a five-second SSO handshake on an executor thread would stall
-/// the reminder ticker sharing it.
-async fn sync_once() -> bool {
-    let handle = tokio::task::spawn_blocking(|| {
-        let mut accounts = match AccountStore::open_default() {
-            Ok(accounts) => accounts,
-            Err(why) => {
-                tracing::warn!(%why, "cannot open the account store; skipping sync");
-                return false;
-            }
-        };
-
-        if accounts.enabled().count() == 0 {
-            return false;
-        }
-
-        let root = slate::store::vdir::default_root();
-        // One pass covers CalDAV and CardDAV; the address books are written to
-        // the suite's contacts root, which is why the unit file grants it too.
-        let contacts_root = slate::store::contacts::default_root();
-        // Provider manifests, for accounts that name a provider rather than a
-        // raw URL. Reloaded each pass so a dropped-in manifest applies without
-        // restarting the daemon.
-        let registry = cosmic_pim_accounts::Registry::load();
-        let reports = cosmic_pim_sync::sync_all(&mut accounts, &registry, &root, &contacts_root);
-
-        let mut changed = false;
-        for report in &reports {
-            // One line per account whatever happened: a silent sync that is
-            // quietly failing is indistinguishable from one that is working.
-            match &report.collections {
-                Ok(_) => tracing::info!("{}", report.summary()),
-                Err(_) => tracing::warn!("{}", report.summary()),
-            }
-            changed |= report.changed();
-        }
-        changed
-    });
-
-    match handle.await {
-        Ok(changed) => changed,
-        Err(why) => {
-            tracing::error!(%why, "the sync task panicked");
-            false
-        }
+/// Claims the owner name and serves the sync interface on it. `Ok(None)`
+/// means another daemon already holds the name.
+async fn become_owner(
+    running: std::sync::Arc<tokio::sync::Mutex<()>>,
+) -> Result<Option<zbus::Connection>, zbus::Error> {
+    let session = zbus::Connection::session().await?;
+    let Some(connection) = reminders::claim_ownership(session).await? else {
+        return Ok(None);
+    };
+    if let Err(why) = connection
+        .object_server()
+        .at(
+            background::OBJECT_PATH,
+            background::Service::new(
+                running,
+                background::sync_accounts,
+                background::refresh_feeds,
+            ),
+        )
+        .await
+    {
+        // Reminders still work; the app's "Sync now" will report the error.
+        tracing::warn!(%why, "could not serve the sync interface");
     }
+    Ok(Some(connection))
 }
 
-/// Refreshes every ICS feed subscription that is due. Returns whether any
-/// calendar changed on disk.
+/// One background pass — accounts, then due feeds — unless one is already
+/// running (the timer's last, or one the app asked for over the bus). Tells
+/// `landed` when anything changed on disk.
 ///
-/// Feeds ride the sync tick but not the sync engine: a subscription is a URL
-/// with no account behind it, so `sync_all` never schedules one. Each feed
-/// carries its own interval and HTTP validators in its sidecar, and `due`
-/// keeps an idle pass down to a directory scan — most ticks touch nothing.
-async fn refresh_feeds() -> bool {
-    use cosmic_pim_caldav::feed;
-
-    let handle = tokio::task::spawn_blocking(|| {
-        let root = slate::store::vdir::default_root();
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let mut changed = false;
-
-        for meta in slate::store::vdir::collections(&root) {
-            if !feed::is_feed(&meta.path) {
-                continue;
-            }
-            if !feed::FeedState::load(&meta.path).is_some_and(|state| state.due(now_ms)) {
-                continue;
-            }
-
-            match feed::refresh(&meta.path, now_ms) {
-                Ok(outcome) => {
-                    // One line per actual fetch, so a quietly failing feed is
-                    // distinguishable from one that is simply unchanged.
-                    tracing::info!(
-                        feed = %meta.name,
-                        updated = outcome.updated,
-                        removed = outcome.removed,
-                        unchanged = outcome.unchanged,
-                        guard_tripped = outcome.guard_tripped,
-                        "feed refreshed"
-                    );
-                    changed |= outcome.changed();
-                }
-                Err(why) => tracing::warn!(feed = %meta.name, %why, "feed refresh failed"),
-            }
-        }
-        changed
-    });
-
-    match handle.await {
-        Ok(changed) => changed,
-        Err(why) => {
-            tracing::error!(%why, "the feed refresh task panicked");
+/// Spawned rather than awaited in the main loop: a pass can spend many
+/// seconds on the network, and reminders must keep firing meanwhile.
+fn spawn_background_pass(
+    running: &std::sync::Arc<tokio::sync::Mutex<()>>,
+    landed: tokio::sync::mpsc::Sender<()>,
+) {
+    let Ok(guard) = running.clone().try_lock_owned() else {
+        tracing::debug!("a sync pass is still running; skipping this tick");
+        return;
+    };
+    tokio::spawn(async move {
+        let _guard = guard;
+        let changed = tokio::task::spawn_blocking(|| {
+            let (_, synced) = background::sync_accounts();
+            let fed = background::refresh_feeds(false);
+            synced || fed
+        })
+        .await
+        .unwrap_or_else(|why| {
+            tracing::error!(%why, "the sync task panicked");
             false
+        });
+        if changed {
+            let _ = landed.try_send(());
         }
-    }
+    });
 }
 
 /// Receives from the watcher if there is one, otherwise never resolves.

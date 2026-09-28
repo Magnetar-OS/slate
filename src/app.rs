@@ -167,8 +167,10 @@ pub struct AppModel {
 
     toasts: widget::Toasts<Message>,
     reminders: crate::reminders::Scheduler,
-    /// True while the background daemon owns reminders, so we stay quiet.
-    reminders_delegated: bool,
+    /// True while the background daemon holds the owner name: it fires the
+    /// reminders, so we stay quiet, and it runs every sync pass, so we ask it
+    /// rather than syncing ourselves.
+    daemon_running: bool,
 
     /// The single-instance bus connection, once libcosmic hands it over. The
     /// scheduling interface is served on it and invitation replies go out on
@@ -891,9 +893,9 @@ impl cosmic::Application for AppModel {
             // Shared with the daemon, so a hand-over in either direction does
             // not repeat what the other already showed.
             reminders: crate::reminders::Scheduler::persistent(crate::reminders::fired_path()),
-            // Assumed until the check comes back, so a fast-starting daemon never
-            // races us into a duplicate notification.
-            reminders_delegated: true,
+            // Assumed until the owner watch first reports, so a fast-starting
+            // daemon never races us into a duplicate notification.
+            daemon_running: true,
             dbus: None,
             invitations: Vec::new(),
         };
@@ -2239,10 +2241,12 @@ impl cosmic::Application for AppModel {
                     self.reload();
                 }
                 // Feed refreshes ride the same tick, paced to one check every
-                // five minutes; each feed's own interval gates the fetch.
-                let feeds_due = self
-                    .last_feed_check
-                    .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                // five minutes; each feed's own interval gates the fetch. The
+                // daemon, when it runs, refreshes them on its own sync tick.
+                let feeds_due = !self.daemon_running
+                    && self
+                        .last_feed_check
+                        .is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if feeds_due {
                     return Task::batch([self.refresh_feeds(false), self.fire_due_reminders()]);
                 }
@@ -2250,8 +2254,8 @@ impl cosmic::Application for AppModel {
             }
 
             Message::ReminderOwnership(delegated) => {
-                let taking_over = self.reminders_delegated && !delegated;
-                self.reminders_delegated = delegated;
+                let taking_over = self.daemon_running && !delegated;
+                self.daemon_running = delegated;
                 if delegated {
                     tracing::info!("the reminder daemon is running; leaving reminders to it");
                 } else if taking_over {
@@ -2697,7 +2701,7 @@ impl AppModel {
         &mut self,
         slept_at: NaiveDateTime,
     ) -> Task<cosmic::Action<Message>> {
-        if self.reminders_delegated {
+        if self.daemon_running {
             return Task::none();
         }
         let Some(store) = self.store.as_ref() else {
@@ -2734,7 +2738,7 @@ impl AppModel {
     /// range, so they still fire while you are looking at a different month.
     fn fire_due_reminders(&mut self) -> Task<cosmic::Action<Message>> {
         // The daemon has it covered; firing here too would double every reminder.
-        if self.reminders_delegated {
+        if self.daemon_running {
             return Task::none();
         }
 
@@ -2975,7 +2979,12 @@ impl AppModel {
         }
     }
 
-    /// Runs a sync pass off the UI thread.
+    /// Runs a sync pass: the daemon's, when it is running, otherwise one of
+    /// our own off the UI thread.
+    ///
+    /// Never both. Two passes at once each rewrite the collections' sync
+    /// state whole, and one of them loses the other's queue entries and
+    /// etags — see [`crate::background`].
     fn sync_now(&mut self) -> Task<cosmic::Action<Message>> {
         if self.syncing || self.accounts.is_none() {
             return Task::none();
@@ -2983,38 +2992,36 @@ impl AppModel {
         self.syncing = true;
         self.sync_status = None;
 
-        let root = crate::store::vdir::default_root();
-        // The sync engine walks CalDAV and CardDAV in one pass: an account can
-        // offer both, and the address books land in the suite's contacts root
-        // for Circle to read.
-        let contacts_root = crate::store::contacts::default_root();
-        // Provider manifests: how an account that names a provider rather than
-        // a raw URL resolves its endpoints and OAuth client.
-        let registry = cosmic_pim_accounts::Registry::load();
-        cosmic::task::future(async move {
-            let outcome = tokio::task::spawn_blocking(move || {
-                // Reopened inside the task: `AccountStore` is not `Send`-shared
-                // with the UI, and re-reading also picks up any change made
-                // since the button was pressed.
-                let mut accounts = match cosmic_pim_accounts::AccountStore::open_default() {
-                    Ok(accounts) => accounts,
-                    Err(why) => return (vec![why.to_string()], false),
-                };
-                let reports =
-                    cosmic_pim_sync::sync_all(&mut accounts, &registry, &root, &contacts_root);
-                let changed = reports.iter().any(cosmic_pim_sync::AccountReport::changed);
-                (
-                    reports
-                        .iter()
-                        .map(cosmic_pim_sync::AccountReport::summary)
-                        .collect(),
-                    changed,
-                )
-            })
-            .await
-            .unwrap_or_else(|why| (vec![why.to_string()], false));
+        if self.daemon_running {
+            let bus = self.dbus.clone();
+            return cosmic::task::future(async move {
+                let report = async {
+                    let connection = match bus {
+                        Some(connection) => connection,
+                        None => zbus::Connection::session().await?,
+                    };
+                    crate::background::BackgroundProxy::new(&connection)
+                        .await?
+                        .sync()
+                        .await
+                }
+                .await;
+                let (lines, changed) = report.unwrap_or_else(|why| {
+                    tracing::warn!(%why, "the reminder daemon did not run the sync");
+                    (
+                        vec![fl!("sync-daemon-failed", reason = why.to_string())],
+                        false,
+                    )
+                });
+                Message::SyncFinished(lines, changed)
+            });
+        }
 
-            Message::SyncFinished(outcome.0, outcome.1)
+        cosmic::task::future(async move {
+            let (lines, changed) = tokio::task::spawn_blocking(crate::background::sync_accounts)
+                .await
+                .unwrap_or_else(|why| (vec![why.to_string()], false));
+            Message::SyncFinished(lines, changed)
         })
     }
 
@@ -3092,8 +3099,9 @@ impl AppModel {
         Task::none()
     }
 
-    /// Refreshes due ICS feeds off the UI thread; `force` fetches them all,
-    /// due or not, which is what a just-added subscription wants.
+    /// Refreshes due ICS feeds; `force` fetches them all, due or not, which
+    /// is what a just-added subscription wants. Asks the daemon when it is
+    /// running, for the same reason [`Self::sync_now`] does.
     fn refresh_feeds(&mut self, force: bool) -> Task<cosmic::Action<Message>> {
         if self.refreshing_feeds {
             return Task::none();
@@ -3101,35 +3109,35 @@ impl AppModel {
         self.refreshing_feeds = true;
         self.last_feed_check = Some(std::time::Instant::now());
 
-        let root = crate::store::vdir::default_root();
-        cosmic::task::future(async move {
-            let changed = tokio::task::spawn_blocking(move || {
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                let mut changed = false;
-                for meta in crate::store::vdir::collections(&root) {
-                    if !cosmic_pim_caldav::feed::is_feed(&meta.path) {
-                        continue;
-                    }
-                    let due = cosmic_pim_caldav::feed::FeedState::load(&meta.path)
-                        .is_some_and(|state| state.due(now_ms));
-                    if !(force || due) {
-                        continue;
-                    }
-                    match cosmic_pim_caldav::feed::refresh(&meta.path, now_ms) {
-                        Ok(outcome) => changed |= outcome.changed(),
-                        // Logged, not toasted: a feed that is down will be
-                        // retried on its own schedule, and there is nothing
-                        // for the user to do about it right now.
-                        Err(why) => {
-                            tracing::warn!(feed = meta.id, %why, "feed refresh failed");
-                        }
-                    }
+        if self.daemon_running {
+            let bus = self.dbus.clone();
+            return cosmic::task::future(async move {
+                let changed = async {
+                    let connection = match bus {
+                        Some(connection) => connection,
+                        None => zbus::Connection::session().await?,
+                    };
+                    crate::background::BackgroundProxy::new(&connection)
+                        .await?
+                        .refresh_feeds(force)
+                        .await
                 }
-                changed
-            })
-            .await
-            .unwrap_or(false);
+                .await
+                .unwrap_or_else(|why| {
+                    // A feed is retried on its own schedule; nothing for the
+                    // user to act on now.
+                    tracing::warn!(%why, "the reminder daemon did not refresh the feeds");
+                    false
+                });
+                Message::FeedsRefreshed(changed)
+            });
+        }
 
+        cosmic::task::future(async move {
+            let changed =
+                tokio::task::spawn_blocking(move || crate::background::refresh_feeds(force))
+                    .await
+                    .unwrap_or(false);
             Message::FeedsRefreshed(changed)
         })
     }

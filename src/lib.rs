@@ -15,6 +15,7 @@
 pub use cosmic_pim_core::{model, store};
 
 pub mod app;
+pub mod background;
 pub mod clock;
 pub mod config;
 pub mod i18n;

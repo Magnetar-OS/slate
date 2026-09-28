@@ -39,6 +39,9 @@ All notable user-facing changes to Slate. The format follows
 - After a timezone change (travel, automatic time zone) reminders fire on time
   and "today" is right without restarting the app, the panel applet or the
   daemon.
+- "Sync now", adding an account and feed refreshes go through the background
+  daemon while it runs, instead of starting a second sync pass beside it
+  that could lose queued changes; reminders no longer wait on a sync pass.
 
 ## [1.1.0] - 2026-09-22
 

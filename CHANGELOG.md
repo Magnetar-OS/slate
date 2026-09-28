@@ -9,6 +9,9 @@ All notable user-facing changes to Slate. The format follows
 
 - The main window responds to the mouse again when maximised (libcosmic
   `03d7dcb`).
+- Editing an invitation you received no longer bumps its `SEQUENCE`, so the
+  organizer's later updates and cancellations are applied instead of being
+  dropped as out of date.
 - Saving an event without touching its repeat settings keeps its recurrence
   rule exactly as written; a rule from another client could previously gain
   or lose its last occurrence.

@@ -343,8 +343,15 @@ impl Editor {
         let mut event = match &self.original {
             Some(original) => {
                 let mut event = original.clone();
-                // Bump SEQUENCE so CalDAV servers and other clients see a newer revision.
-                event.sequence = event.sequence.saturating_add(1);
+                // Bump SEQUENCE so CalDAV servers and other clients see a newer
+                // revision — unless the event has an ORGANIZER. SEQUENCE is the
+                // organizer's revision counter (RFC 5546), and Slate never sends
+                // REQUESTs, so on a scheduled event it belongs to the organizer's
+                // client: bumping it on this copy would make the organizer's next
+                // update or CANCEL compare as stale in `itip::apply`.
+                if event.organizer.is_none() {
+                    event.sequence = event.sequence.saturating_add(1);
+                }
                 event
             }
             None => Event::draft(
@@ -1199,6 +1206,29 @@ mod tests {
             saved.rrule.as_deref(),
             Some("FREQ=DAILY;INTERVAL=2;COUNT=5")
         );
+    }
+
+    #[test]
+    fn an_invitation_keeps_the_organizers_sequence() {
+        // SEQUENCE is the organizer's revision. Bumping it on the attendee's
+        // copy makes the organizer's next update or CANCEL compare as stale
+        // in `itip::apply`, and it is silently dropped.
+        let mut event = Event::draft(
+            "personal",
+            NaiveDate::from_ymd_opt(2026, 8, 4)
+                .unwrap()
+                .and_hms_opt(9, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        );
+        event.summary = "Quarterly review".into();
+        event.sequence = 2;
+        event.organizer = Some(crate::model::Attendee::new("boss@example.com", None));
+
+        let mut editor = Editor::from_event(&event, chrono_tz::UTC);
+        editor.description = "bring the numbers".into();
+
+        assert_eq!(editor.to_event(chrono_tz::UTC).unwrap().sequence, 2);
     }
 
     #[test]

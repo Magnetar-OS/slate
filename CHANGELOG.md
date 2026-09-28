@@ -25,6 +25,9 @@ All notable user-facing changes to Slate. The format follows
   the launcher and mixed events into unrelated results.
 - Reminders keep firing while the window is open after the background daemon
   stops, and are not shown twice when the daemon starts after the window.
+- A reminder is no longer shown a second time when the daemon restarts (an
+  upgrade, a new login) or hands over to the open window within minutes of
+  its trigger.
 
 ## [1.1.0] - 2026-09-22
 

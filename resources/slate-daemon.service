@@ -27,6 +27,9 @@ ReadWritePaths=%h/.local/share/contacts
 ReadWritePaths=%h/.cache/cosmic-pim
 ReadWritePaths=%h/.config/cosmic-pim
 ReadWritePaths=%h/.local/share/cosmic-pim
+# Owned by this app: $XDG_STATE_HOME/slate, where the reminders already shown
+# are recorded so a restart does not show them again. Created by systemd.
+StateDirectory=slate
 
 [Install]
 WantedBy=graphical-session.target

@@ -16,13 +16,15 @@ use crate::fl;
 use crate::model::Occurrence;
 use crate::store::Store;
 use chrono::{Duration, NaiveDateTime};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 /// Identifies one alarm on one occurrence, so it fires exactly once.
 ///
 /// The recurrence-aware part is the occurrence's own start: two instances of a
 /// weekly series are different reminders, but re-reading the same file is not.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ReminderId {
     pub uid: String,
     pub calendar_id: String,
@@ -77,9 +79,17 @@ impl Reminder {
 }
 
 /// Remembers what has already been shown.
+///
+/// In memory for the pure decisions, and — for the daemon and the app — on
+/// disk too ([`Scheduler::persistent`]): the memory has to outlive the
+/// process, or every restart (a package upgrade, `Restart=on-failure`, a new
+/// login) and every hand-over between the app and the daemon replays each
+/// alarm still inside its grace period.
 #[derive(Default)]
 pub struct Scheduler {
     fired: HashSet<ReminderId>,
+    /// Where the fired set is shared with the other process, if anywhere.
+    path: Option<PathBuf>,
 }
 
 /// How far past its trigger a reminder may still fire.
@@ -93,6 +103,65 @@ impl Scheduler {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A scheduler whose memory is shared through `path`, starting from what
+    /// is already recorded there.
+    #[must_use]
+    pub fn persistent(path: PathBuf) -> Self {
+        let mut scheduler = Self {
+            fired: HashSet::new(),
+            path: Some(path),
+        };
+        scheduler.reload();
+        scheduler
+    }
+
+    /// Merges in whatever the other process recorded since the last look.
+    ///
+    /// A missing or unreadable file is an empty memory: the worst case is one
+    /// repeated notification, which is better than none.
+    pub fn reload(&mut self) {
+        let Some(path) = &self.path else {
+            return;
+        };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        match serde_json::from_str::<Vec<ReminderId>>(&text) {
+            Ok(ids) => self.fired.extend(ids),
+            Err(why) => {
+                tracing::warn!(%why, path = %path.display(), "ignoring an unreadable fired-reminder file");
+            }
+        }
+    }
+
+    /// Writes the memory out for the other process, atomically.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be written.
+    pub fn persist(&self) -> std::io::Result<()> {
+        let Some(path) = &self.path else {
+            return Ok(());
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut ids: Vec<&ReminderId> = self.fired.iter().collect();
+        // Stable output, so an unchanged set rewrites identical bytes.
+        ids.sort_by(|a, b| {
+            (a.start, &a.calendar_id, &a.uid, a.offset_secs).cmp(&(
+                b.start,
+                &b.calendar_id,
+                &b.uid,
+                b.offset_secs,
+            ))
+        });
+        let text = serde_json::to_string(&ids).map_err(std::io::Error::other)?;
+        cosmic_pim_core::atomic::write(path, &text, None)
+            .map(|_| ())
+            .map_err(|why| std::io::Error::other(why.to_string()))
     }
 
     /// Reminders whose trigger has passed but which have not been shown yet.
@@ -175,6 +244,21 @@ impl Scheduler {
 /// How far ahead of today a sweep looks for events whose alarms are due.
 const LOOKAHEAD_DAYS: i64 = 2;
 
+/// Where the app and the daemon share what they have fired:
+/// `$XDG_STATE_HOME/slate/fired-reminders.json`.
+///
+/// The same directory the daemon's unit declares as its `StateDirectory=`, so
+/// the sandboxed daemon can write it.
+#[must_use]
+pub fn fired_path() -> PathBuf {
+    let state = std::env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/state")))
+        .unwrap_or_else(std::env::temp_dir);
+    state.join("slate").join("fired-reminders.json")
+}
+
 /// The component behind one occurrence, for its alarms.
 ///
 /// Instance-aware: an overridden occurrence carries its own VALARMs (a moved
@@ -194,6 +278,9 @@ fn instance(store: &Store, occurrence: &Occurrence) -> Option<crate::model::Even
 /// The sweep both the app and the daemon run: every reminder due at `now`,
 /// each at most once.
 ///
+/// Reloads the shared memory first and persists it after, so whichever
+/// process owns reminders sees what the other already showed.
+///
 /// # Errors
 ///
 /// When the store cannot list occurrences.
@@ -210,6 +297,8 @@ pub fn due_reminders(
         &config.hidden_set(),
     )?;
 
+    scheduler.reload();
+    let known = scheduler.tracked();
     let due = scheduler.due(
         &occurrences,
         |occurrence| {
@@ -223,11 +312,17 @@ pub fn due_reminders(
 
     // Keep the fired set from growing for the lifetime of the process.
     scheduler.forget_before(now - Duration::days(1));
+    if (!due.is_empty() || scheduler.tracked() != known)
+        && let Err(why) = scheduler.persist()
+    {
+        tracing::warn!(%why, "could not record the fired reminders; a restart may repeat one");
+    }
     Ok(due)
 }
 
 /// The digest's count: the alarms that passed between `slept_at` and `now`,
-/// marked shown so none of them fires late.
+/// marked shown so none of them fires late. Shares the memory like
+/// [`due_reminders`].
 ///
 /// # Errors
 ///
@@ -246,7 +341,8 @@ pub fn missed_reminders(
         &config.hidden_set(),
     )?;
 
-    Ok(sweep_missed(
+    scheduler.reload();
+    let missed = sweep_missed(
         scheduler,
         &occurrences,
         |occurrence| {
@@ -257,7 +353,13 @@ pub fn missed_reminders(
         slept_at,
         now,
         |occurrence| config.reminder_for(&occurrence.calendar_id),
-    ))
+    );
+    if missed > 0
+        && let Err(why) = scheduler.persist()
+    {
+        tracing::warn!(%why, "could not record the missed reminders");
+    }
+    Ok(missed)
 }
 
 /// Well-known bus name claimed by whichever process is responsible for firing
@@ -836,6 +938,91 @@ mod tests {
 
         scheduler.forget_before(at(9, 0) + Duration::days(1));
         assert_eq!(scheduler.tracked(), 0);
+    }
+
+    /// A store in a temporary directory holding one calendar, and the zone its
+    /// occurrences are expressed in.
+    fn store_with(
+        events: impl FnOnce(&str, chrono_tz::Tz) -> Vec<crate::model::Event>,
+    ) -> (tempfile::TempDir, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(
+            &dir.path().join("calendars"),
+            &dir.path().join("index.sqlite"),
+        )
+        .unwrap();
+        let calendar = store
+            .create_calendar("Personal", crate::model::PALETTE[0])
+            .unwrap();
+        for event in events(&calendar.id, store.local_timezone()) {
+            store.save(&event).unwrap();
+        }
+        (dir, store)
+    }
+
+    fn event_at(
+        calendar_id: &str,
+        local: chrono_tz::Tz,
+        summary: &str,
+        start: NaiveDateTime,
+    ) -> crate::model::Event {
+        let mut event = crate::model::Event::draft(calendar_id, start, local);
+        event.summary = summary.into();
+        event
+    }
+
+    #[test]
+    fn a_restart_does_not_repeat_what_already_fired() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("slate").join("fired-reminders.json");
+        let events = [occurrence("Standup", at(9, 0))];
+
+        let mut before = Scheduler::persistent(path.clone());
+        assert_eq!(
+            before
+                .due(&events, ten_minutes_before, at(8, 50), |_| None)
+                .len(),
+            1
+        );
+        before.persist().unwrap();
+
+        // The daemon restarts a minute later, still inside the grace window.
+        let mut after = Scheduler::persistent(path);
+        assert!(
+            after
+                .due(&events, ten_minutes_before, at(8, 51), |_| None)
+                .is_empty(),
+            "the restarted process fired the same reminder again"
+        );
+    }
+
+    #[test]
+    fn a_hand_over_sees_what_the_other_process_fired() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fired-reminders.json");
+        let config = Config::default();
+        let (_store_dir, store) = store_with(|calendar, local| {
+            let mut standup = event_at(calendar, local, "Standup", at(9, 0));
+            standup.alarms = vec![Duration::minutes(-10)];
+            vec![standup]
+        });
+
+        // The daemon fires, then goes away; the app, which started earlier,
+        // takes over inside the grace window.
+        let mut app = Scheduler::persistent(path.clone());
+        let mut daemon = Scheduler::persistent(path);
+        assert_eq!(
+            due_reminders(&store, &mut daemon, &config, at(8, 50))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            due_reminders(&store, &mut app, &config, at(8, 51))
+                .unwrap()
+                .is_empty(),
+            "the reminder fired in both processes"
+        );
     }
 
     #[tokio::test]

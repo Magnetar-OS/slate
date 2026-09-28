@@ -94,7 +94,9 @@ async fn main() -> std::process::ExitCode {
         }
     };
 
-    let mut scheduler = Scheduler::new();
+    // What already fired survives a restart: `Restart=on-failure`, a package
+    // upgrade or a new login must not replay alarms still inside their grace.
+    let mut scheduler = Scheduler::persistent(reminders::fired_path());
     let mut ticker = tokio::time::interval(TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 

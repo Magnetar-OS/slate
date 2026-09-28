@@ -886,7 +886,9 @@ impl cosmic::Application for AppModel {
             last_reminder_sweep: chrono::Local::now().naive_local(),
             scope_prompt: None,
             toasts: widget::Toasts::new(Message::CloseToast),
-            reminders: crate::reminders::Scheduler::new(),
+            // Shared with the daemon, so a hand-over in either direction does
+            // not repeat what the other already showed.
+            reminders: crate::reminders::Scheduler::persistent(crate::reminders::fired_path()),
             // Assumed until the check comes back, so a fast-starting daemon never
             // races us into a duplicate notification.
             reminders_delegated: true,

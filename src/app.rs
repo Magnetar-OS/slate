@@ -133,6 +133,8 @@ pub struct AppModel {
     sub_form: Option<SubscriptionForm>,
     /// A subscription the user asked to remove, awaiting the confirm dialog.
     pending_feed_removal: Option<String>,
+    /// An account the user asked to remove, awaiting the confirm dialog.
+    pending_account_removal: Option<String>,
     /// True while a background feed-refresh pass is running.
     refreshing_feeds: bool,
     /// When feeds were last checked for due refreshes, to pace the checks.
@@ -233,7 +235,11 @@ pub enum Message {
     AccountUrlChanged(String),
     AccountUsernameChanged(String),
     AccountPasswordChanged(String),
-    AccountRemove(String),
+    /// Asks to remove the account with this id; confirmed through a dialog
+    /// before anything is deleted.
+    AccountRemoveRequest(String),
+    AccountRemoveConfirm,
+    AccountRemoveCancel,
     SyncNow,
     SyncFinished(Vec<String>, bool),
 
@@ -913,6 +919,7 @@ impl cosmic::Application for AppModel {
             sync_status: None,
             sub_form: None,
             pending_feed_removal: None,
+            pending_account_removal: None,
             refreshing_feeds: false,
             last_feed_check: None,
             conflicts: Vec::new(),
@@ -1178,6 +1185,30 @@ impl cosmic::Application for AppModel {
             );
         }
 
+        // The account list is the whole suite's: removing one here removes it
+        // from Envelope and Circle too, and forgets its password. One click
+        // must not be able to do that.
+        if let Some(id) = &self.pending_account_removal {
+            let name = self
+                .accounts
+                .as_ref()
+                .and_then(|accounts| accounts.get(id))
+                .map_or_else(|| id.clone(), |account| account.display_name.clone());
+            return Some(
+                widget::dialog()
+                    .title(fl!("remove-account-title"))
+                    .body(fl!("remove-account-body", name = name))
+                    .primary_action(
+                        widget::button::destructive(fl!("remove"))
+                            .on_press(Message::AccountRemoveConfirm),
+                    )
+                    .secondary_action(
+                        widget::button::text(fl!("cancel")).on_press(Message::AccountRemoveCancel),
+                    )
+                    .into(),
+            );
+        }
+
         if let Some(input) = &self.quick_add {
             return Some(self.quick_add_dialog(input));
         }
@@ -1418,6 +1449,8 @@ impl cosmic::Application for AppModel {
             self.quick_add = None;
         } else if self.pending_feed_removal.is_some() {
             self.pending_feed_removal = None;
+        } else if self.pending_account_removal.is_some() {
+            self.pending_account_removal = None;
         } else if self.scope_prompt.is_some() {
             self.scope_prompt = None;
         } else if self.core.window.show_context {
@@ -1828,7 +1861,12 @@ impl cosmic::Application for AppModel {
                 return self.toast_info(&text);
             }
 
-            Message::AccountRemove(id) => {
+            Message::AccountRemoveRequest(id) => self.pending_account_removal = Some(id),
+            Message::AccountRemoveCancel => self.pending_account_removal = None,
+            Message::AccountRemoveConfirm => {
+                let Some(id) = self.pending_account_removal.take() else {
+                    return Task::none();
+                };
                 self.reopen_accounts();
                 if let Some(accounts) = self.accounts.as_mut()
                     && let Err(why) = accounts.remove(&id)

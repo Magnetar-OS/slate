@@ -9,6 +9,8 @@ All notable user-facing changes to Slate. The format follows
 
 - The invitation dialog shows its date as the rest of the app does ("Tue 4
   August 09:00") rather than as an ISO date.
+- Removing an account asks first: it removes the account from every Magnetar
+  app and forgets its password.
 
 ### Fixed
 

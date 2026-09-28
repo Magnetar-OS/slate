@@ -47,7 +47,7 @@ pub fn view<'a>(
                     .control(
                         widget::button::text(fl!("remove"))
                             .class(cosmic::theme::Button::Destructive)
-                            .on_press(Message::AccountRemove(account.id.clone())),
+                            .on_press(Message::AccountRemoveRequest(account.id.clone())),
                     ),
             );
         }

@@ -135,6 +135,9 @@ pub struct AppModel {
     pending_feed_removal: Option<String>,
     /// An account the user asked to remove, awaiting the confirm dialog.
     pending_account_removal: Option<String>,
+    /// The export dialog's chosen calendar, by index into `calendars()`;
+    /// `Some` shows the dialog.
+    export_choice: Option<usize>,
     /// True while a background feed-refresh pass is running.
     refreshing_feeds: bool,
     /// When feeds were last checked for due refreshes, to pace the checks.
@@ -399,6 +402,10 @@ pub enum Message {
     // Import / export
     ImportRequested,
     ExportRequested,
+    /// The export dialog's calendar picker, by index into the calendar list.
+    ExportCalendarChosen(usize),
+    ExportConfirm,
+    ExportCancel,
     ImportPath(PathBuf),
     ExportTo(PathBuf, String),
     DialogCancelled,
@@ -630,6 +637,18 @@ fn withdraw_declined(
 ) -> cosmic_pim_caldav::Result<cosmic_pim_caldav::itip::Outcome> {
     use cosmic_pim_caldav::itip;
     itip::apply(collection, &itip::with_method(ics, "CANCEL"), me)
+}
+
+/// The calendar the export dialog starts on: the first one shown in the
+/// sidebar that the user writes to — their own, not a subscribed feed — or
+/// failing that the first shown, or the first at all.
+fn default_export(calendars: &[CalendarMeta], config: &Config) -> usize {
+    let shown = |c: &&CalendarMeta| !config.is_hidden(&c.id);
+    calendars
+        .iter()
+        .position(|c| shown(&c) && !c.read_only)
+        .or_else(|| calendars.iter().position(|c| shown(&c)))
+        .unwrap_or(0)
 }
 
 /// Adds a delivered invitation to the queue, once.
@@ -920,6 +939,7 @@ impl cosmic::Application for AppModel {
             sub_form: None,
             pending_feed_removal: None,
             pending_account_removal: None,
+            export_choice: None,
             refreshing_feeds: false,
             last_feed_check: None,
             conflicts: Vec::new(),
@@ -1209,6 +1229,28 @@ impl cosmic::Application for AppModel {
             );
         }
 
+        if let Some(chosen) = self.export_choice {
+            let names: Vec<String> = self.calendars().iter().map(|c| c.name.clone()).collect();
+            return Some(
+                widget::dialog()
+                    .title(fl!("export"))
+                    .body(fl!("export-choose"))
+                    .control(widget::dropdown(
+                        names,
+                        Some(chosen),
+                        Message::ExportCalendarChosen,
+                    ))
+                    .primary_action(
+                        widget::button::suggested(fl!("export-action"))
+                            .on_press(Message::ExportConfirm),
+                    )
+                    .secondary_action(
+                        widget::button::text(fl!("cancel")).on_press(Message::ExportCancel),
+                    )
+                    .into(),
+            );
+        }
+
         if let Some(input) = &self.quick_add {
             return Some(self.quick_add_dialog(input));
         }
@@ -1451,6 +1493,8 @@ impl cosmic::Application for AppModel {
             self.pending_feed_removal = None;
         } else if self.pending_account_removal.is_some() {
             self.pending_account_removal = None;
+        } else if self.export_choice.is_some() {
+            self.export_choice = None;
         } else if self.scope_prompt.is_some() {
             self.scope_prompt = None;
         } else if self.core.window.show_context {
@@ -2371,14 +2415,24 @@ impl cosmic::Application for AppModel {
                 });
             }
 
+            // Which calendar to export is the user's to say; the first one on
+            // disk could be a subscribed feed.
             Message::ExportRequested => {
+                if self.calendars().is_empty() {
+                    return self.toast_error(&fl!("no-calendars"));
+                }
+                self.export_choice = Some(default_export(self.calendars(), &self.config));
+            }
+            Message::ExportCalendarChosen(index) => self.export_choice = Some(index),
+            Message::ExportCancel => self.export_choice = None,
+            Message::ExportConfirm => {
                 let Some(calendar) = self
-                    .store
-                    .as_ref()
-                    .and_then(|store| store.calendars().first())
+                    .export_choice
+                    .take()
+                    .and_then(|index| self.calendars().get(index))
                     .map(|c| (c.id.clone(), c.name.clone()))
                 else {
-                    return self.toast_error(&fl!("no-calendars"));
+                    return Task::none();
                 };
 
                 let (id, name) = calendar;
@@ -5446,6 +5500,28 @@ mod tests {
             withdraw_declined(collection.path(), &review.ics, "me@example.com").unwrap(),
             cosmic_pim_caldav::itip::Outcome::NoMatch
         );
+    }
+
+    fn calendar(id: &str, read_only: bool) -> CalendarMeta {
+        CalendarMeta {
+            id: id.to_owned(),
+            name: id.to_owned(),
+            color: PALETTE[0],
+            path: std::path::PathBuf::from(id),
+            read_only,
+        }
+    }
+
+    #[test]
+    fn export_starts_on_the_users_own_calendar_not_a_feed() {
+        let calendars = [
+            calendar("holidays-feed", true),
+            calendar("hidden", false),
+            calendar("personal", false),
+        ];
+        let mut config = Config::default();
+        config.toggle_calendar("hidden");
+        assert_eq!(default_export(&calendars, &config), 2);
     }
 
     #[test]

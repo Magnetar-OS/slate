@@ -142,6 +142,8 @@ export = Export calendar…
 import-done = Imported { $added } new and { $updated } updated events.
 import-empty = No events found in { $path }.
 export-done = Exported to { $path }.
+export-choose = Which calendar should be saved as an iCalendar file?
+export-action = Export…
 error-remote-file = Only local files are supported.
 
 ## Accounts and sync

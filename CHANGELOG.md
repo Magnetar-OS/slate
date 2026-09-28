@@ -67,6 +67,8 @@ All notable user-facing changes to Slate. The format follows
   calendar, instead of leaving it there marked accepted.
 - Adding or removing an account no longer undoes the calendar bindings a sync
   recorded since the app started.
+- Export asks which calendar to save, instead of always exporting the first
+  one on disk.
 
 ## [1.1.0] - 2026-09-22
 

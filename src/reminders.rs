@@ -40,6 +40,7 @@ pub struct Reminder {
     pub summary: String,
     pub location: Option<String>,
     pub start: NaiveDateTime,
+    pub end: NaiveDateTime,
     pub all_day: bool,
     /// How long until the event starts, at the moment the reminder fires.
     pub lead: Duration,
@@ -96,6 +97,16 @@ impl Reminder {
             Some(location) if !location.is_empty() => format!("{when} · {location}"),
             _ => when,
         }
+    }
+
+    /// How long, from the moment it fired, the reminder's Join button is
+    /// worth waiting on: until the event is over.
+    #[must_use]
+    pub fn joinable_for(&self) -> std::time::Duration {
+        // The reminder fired at the start minus the lead.
+        (self.end - self.start + self.lead)
+            .to_std()
+            .unwrap_or_default()
     }
 }
 
@@ -232,6 +243,7 @@ impl Scheduler {
                     summary: occurrence.summary.clone(),
                     location: occurrence.location.clone(),
                     start: occurrence.start,
+                    end: occurrence.end,
                     all_day: occurrence.all_day,
                     lead: occurrence.start - now,
                     recurrence_id: occurrence.recurrence_id,
@@ -632,20 +644,21 @@ pub async fn on_wake(mut on_resume: impl FnMut()) {
     }
 }
 
-/// Sends one reminder to the desktop's notification service.
+/// Sends one reminder to the desktop's notification service, and — when it
+/// carries a Join button — waits for that button.
 ///
 /// Async deliberately. Showing a notification is a D-Bus round trip, and
 /// `notify-rust`'s blocking variant spins up its own runtime to do it — which
 /// panics outright when called from inside one, as both the daemon and the app's
-/// executor are.
+/// executor are. The wait for the button is async too, and bounded by the
+/// event's end: after that there is nothing left to join, and an undismissed
+/// notification must not hold anything for the life of the process.
+///
+/// Callers that must not wait — the daemon's sweep — spawn this.
 ///
 /// Failure is logged, not surfaced: a missing notification daemon should not
 /// interrupt whatever the user is doing in the calendar.
 pub async fn notify(reminder: &Reminder, app_id: &str, body: String) {
-    // A video-call link earns the notification a Join button — the reminder
-    // for a call should be one press from being in it.
-    let join = reminder.join.clone();
-
     let mut notification = notify_rust::Notification::new();
     notification
         .appname(&fl!("app-title"))
@@ -658,28 +671,38 @@ pub async fn notify(reminder: &Reminder, app_id: &str, body: String) {
             "appointment.reminded".to_owned(),
         ))
         .timeout(notify_rust::Timeout::Never);
-    if join.is_some() {
+    // A video-call link earns the notification a Join button — the reminder
+    // for a call should be one press from being in it.
+    if reminder.join.is_some() {
         notification.action("join", &fl!("join-call"));
     }
 
-    match notification.show_async().await {
-        Ok(handle) => {
-            tracing::debug!(summary = %reminder.summary, "reminder delivered");
-            if let Some(url) = join {
-                // The action wait is a blocking call on the handle, so it
-                // parks on the blocking pool for the notification's lifetime.
-                tokio::task::spawn_blocking(move || {
-                    handle.wait_for_action(|action| {
-                        if action == "join"
-                            && let Err(why) = open::that(&url)
-                        {
-                            tracing::warn!(%why, "could not open the meeting link");
-                        }
-                    });
-                });
-            }
+    let handle = match notification.show_async().await {
+        Ok(handle) => handle,
+        Err(why) => {
+            tracing::warn!(%why, "could not deliver a reminder notification");
+            return;
         }
-        Err(why) => tracing::warn!(%why, "could not deliver a reminder notification"),
+    };
+    tracing::debug!(summary = %reminder.summary, "reminder delivered");
+
+    let Some(url) = reminder.join.clone() else {
+        return;
+    };
+    let pressed = tokio::time::timeout(
+        reminder.joinable_for(),
+        handle.wait_for_action_async(|response| {
+            if let notify_rust::NotificationResponse::Action(action) = response
+                && action == "join"
+                && let Err(why) = open::that_detached(&url)
+            {
+                tracing::warn!(%why, "could not open the meeting link");
+            }
+        }),
+    )
+    .await;
+    if pressed.is_err() {
+        tracing::debug!(summary = %reminder.summary, "the meeting is over; no longer offering to join");
     }
 }
 
@@ -974,6 +997,18 @@ mod tests {
             1,
             "the next instance of the series was suppressed"
         );
+    }
+
+    #[test]
+    fn the_join_button_is_waited_on_only_until_the_meeting_ends() {
+        let mut scheduler = Scheduler::new();
+        let events = [occurrence("Standup", at(9, 0))];
+
+        // Fired at 08:50 for a 09:00-10:00 meeting.
+        let reminder = scheduler
+            .due(&events, ten_minutes_before, at(8, 50), |_| None)
+            .remove(0);
+        assert_eq!(reminder.joinable_for(), std::time::Duration::from_mins(70));
     }
 
     #[test]

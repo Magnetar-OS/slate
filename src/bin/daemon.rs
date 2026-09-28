@@ -125,7 +125,7 @@ async fn main() -> std::process::ExitCode {
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                last_sweep = check(&mut store, &mut scheduler).await;
+                last_sweep = check(&mut store, &mut scheduler);
             }
             Some(()) = wake_rx.recv() => {
                 // Back from suspend: say how many alarms passed, once, then
@@ -134,7 +134,7 @@ async fn main() -> std::process::ExitCode {
                     tracing::warn!(%why, "refresh after resume failed");
                 }
                 report_missed(&mut store, &mut scheduler, last_sweep).await;
-                last_sweep = check(&mut store, &mut scheduler).await;
+                last_sweep = check(&mut store, &mut scheduler);
             }
             _ = sync_ticker.tick() => {
                 let synced = sync_once().await;
@@ -147,7 +147,7 @@ async fn main() -> std::process::ExitCode {
                 if let Err(why) = store.refresh() {
                     tracing::warn!(%why, "refresh after a file change failed");
                 }
-                last_sweep = check(&mut store, &mut scheduler).await;
+                last_sweep = check(&mut store, &mut scheduler);
             }
             () = &mut shutdown => {
                 tracing::info!("shutting down");
@@ -289,16 +289,19 @@ fn signals() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> 
 
 /// One pass: reload config, notify whatever is due. Returns the instant it
 /// looked — the start of the next sleep window.
-async fn check(store: &mut Store, scheduler: &mut Scheduler) -> chrono::NaiveDateTime {
+fn check(store: &mut Store, scheduler: &mut Scheduler) -> chrono::NaiveDateTime {
     // Re-read each pass so a settings change takes effect without a restart.
     let config = load_config();
     let now = chrono::Local::now().naive_local();
 
     match reminders::due_reminders(store, scheduler, &config, now) {
         Ok(due) => {
-            for reminder in &due {
+            for reminder in due {
                 tracing::info!(summary = %reminder.summary, "reminder due");
-                reminders::notify(reminder, APP_ID, reminder.body(&config)).await;
+                let body = reminder.body(&config);
+                // Spawned: a notification with a Join button stays with its
+                // button until the meeting ends, and the sweep must not wait.
+                tokio::spawn(async move { reminders::notify(&reminder, APP_ID, body).await });
             }
         }
         Err(why) => tracing::warn!(%why, "could not load occurrences"),

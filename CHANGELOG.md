@@ -78,6 +78,8 @@ All notable user-facing changes to Slate. The format follows
   split still reaches the server and can be undone.
 - In-app search finds words in an event's description, not only in its title
   and location.
+- The secondary time zone column is right in a week where either zone changes
+  to or from summer time.
 
 ## [1.1.0] - 2026-09-22
 

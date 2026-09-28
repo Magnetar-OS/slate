@@ -69,6 +69,8 @@ pub struct TimeGrid<'a> {
     pub occurrences: &'a BTreeMap<NaiveDate, Vec<Occurrence>>,
     pub calendars: &'a [CalendarMeta],
     pub config: &'a Config,
+    /// The zone the grid's wall clock is in — the store's.
+    pub local: chrono_tz::Tz,
     /// The span an in-progress drag would commit, painted as a translucent
     /// target so the hand knows where the event will land before letting go.
     pub ghost: Option<(NaiveDateTime, NaiveDateTime)>,
@@ -255,22 +257,8 @@ impl<'a> TimeGrid<'a> {
             return label_column(primary).into();
         };
 
-        // Convert each local rule hour on the grid's first day into the
-        // secondary zone. The date matters: the offset difference moves with
-        // DST on either side.
-        use chrono::TimeZone;
-        let local = crate::model::local_timezone();
-        let secondary = std::array::from_fn(|hour| {
-            let naive = self
-                .start
-                .and_hms_opt(hour as u32, 0, 0)
-                .unwrap_or_else(|| self.start.and_time(NaiveTime::MIN));
-            local
-                .from_local_datetime(&naive)
-                .earliest()
-                .map_or_else(String::new, |instant| {
-                    super::format_time(instant.with_timezone(&secondary_tz).time(), self.config)
-                })
+        let secondary = secondary_labels(self.dates(), self.local, secondary_tz, |time| {
+            super::format_time(time, self.config)
         });
 
         widget::row::with_capacity(2)
@@ -664,9 +652,66 @@ fn minutes_from_midnight(dt: NaiveDateTime) -> f32 {
     dt.hour() as f32 * 60.0 + dt.minute() as f32
 }
 
+/// The secondary zone's label for each local rule hour, across `dates`.
+///
+/// The date matters: the offset between the zones moves with DST on either
+/// side, and a week can straddle a change. Where the visible days disagree,
+/// the label lists each distinct reading, one per line, in date order —
+/// one day's reading applied to every column is wrong for the others.
+fn secondary_labels(
+    dates: impl Iterator<Item = NaiveDate>,
+    local: chrono_tz::Tz,
+    secondary: chrono_tz::Tz,
+    format: impl Fn(NaiveTime) -> String,
+) -> [String; 24] {
+    use chrono::TimeZone;
+    let dates: Vec<NaiveDate> = dates.collect();
+    std::array::from_fn(|hour| {
+        let mut readings: Vec<String> = Vec::new();
+        for date in &dates {
+            let Some(naive) = date.and_hms_opt(hour as u32, 0, 0) else {
+                continue;
+            };
+            // A local hour that does not exist (spring forward) reads nothing.
+            if let Some(instant) = local.from_local_datetime(&naive).earliest() {
+                let reading = format(instant.with_timezone(&secondary).time());
+                if !readings.contains(&reading) {
+                    readings.push(reading);
+                }
+            }
+        }
+        readings.join("\n")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_week_across_a_dst_change_labels_each_reading() {
+        // Athens leaves summer time on Sunday 25 October 2026, New York a
+        // week later: for that Sunday the two are six hours apart, not seven.
+        let monday = NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        let week = (0..7).map(|d| monday + Duration::days(d));
+        let labels = secondary_labels(
+            week,
+            chrono_tz::Europe::Athens,
+            chrono_tz::America::New_York,
+            |time| time.format("%H:%M").to_string(),
+        );
+        assert_eq!(labels[9], "02:00\n03:00");
+
+        // A week with no change reads one label per hour.
+        let before = (0..6).map(|d| monday + Duration::days(d));
+        let labels = secondary_labels(
+            before,
+            chrono_tz::Europe::Athens,
+            chrono_tz::America::New_York,
+            |time| time.format("%H:%M").to_string(),
+        );
+        assert_eq!(labels[9], "02:00");
+    }
 
     fn at(h: u32, m: u32) -> NaiveDateTime {
         NaiveDate::from_ymd_opt(2026, 8, 4)
@@ -704,6 +749,7 @@ mod tests {
             occurrences: &map,
             calendars: &calendars,
             config: &config,
+            local: chrono_tz::Europe::Athens,
             ghost: None,
         };
 
@@ -860,6 +906,7 @@ mod tests {
             occurrences: &map,
             calendars: &calendars,
             config: &config,
+            local: chrono_tz::Europe::Athens,
             ghost: None,
         };
 

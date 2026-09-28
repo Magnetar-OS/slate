@@ -2771,6 +2771,7 @@ impl AppModel {
                 occurrences: &self.days,
                 calendars,
                 config: &self.config,
+                local: self.local_timezone(),
                 ghost: self.grid_ghost(),
             }
             .view(),
@@ -2811,6 +2812,7 @@ impl AppModel {
                 occurrences: &self.days,
                 calendars,
                 config: &self.config,
+                local: self.local_timezone(),
                 ghost: self.grid_ghost(),
             }
             .view(),

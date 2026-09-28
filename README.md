@@ -7,9 +7,11 @@ Events and tasks are stored as plain iCalendar files in a
 [vdir](https://vdirsyncer.pimutils.org/en/stable/vdir.html) layout, so they stay readable by `khal`,
 Thunderbird, and anything else that speaks `.ics`.
 
-**CalDAV sync is built in** — add an account under *Accounts* and Slate syncs it directly, in the app
-and in the background daemon. You can instead point `vdirsyncer` at the same directory if you prefer;
-what you must not do is both, on the same collection. See
+**CalDAV sync is built in** — add an account under *Accounts* and Slate syncs it directly: the
+background daemon runs every pass while it is up (the app's *Sync now* asks it), and the app syncs
+by itself only when no daemon is running, so two passes never run at once. You can instead point
+`vdirsyncer` at the same directory if you prefer; what you must not do is both, on the same
+collection. See
 [one sync engine per collection](https://github.com/Magnetar-OS/cosmic-pim/blob/main/ARCHITECTURE.md#one-sync-engine-per-collection).
 
 ## Part of a suite
@@ -109,8 +111,8 @@ cargo build --release
 cargo run
 ```
 
-`cosmic-pim` is a path dependency, so it needs to be checked out as a sibling
-directory of this one.
+`cosmic-pim` resolves from crates.io, so no sibling checkout is needed. To build against a local
+one, uncomment the `[patch.crates-io]` block at the bottom of `Cargo.toml`.
 
 Run the tests with `just test` (or `cargo test`) — the model and storage layers are covered
 without needing a display. `just check-all` runs what CI runs: metadata
@@ -127,6 +129,7 @@ validation, formatting, clippy, and the test suite. The metadata pass needs
 | `~/.config/cosmic-pim/accounts.toml` | Accounts, shared with Circle and Envelope. Passwords live in the OS keychain. |
 | `/usr/share/pop-launcher/plugins/slate/` | Launcher plugin registration. |
 | `/usr/lib/systemd/user/slate-daemon.service` | Reminder daemon unit. |
+| `~/.local/state/slate/fired-reminders.json` | Reminders already shown, shared by the app and the daemon so a restart or a hand-over between them never shows one twice. |
 
 Set `COSMIC_PIM_CALENDAR_DIR` to point the app at a different calendar directory — handy for testing
 against sample data without touching your real one.
@@ -151,6 +154,8 @@ ui/        Month grid, time grid, task list, editors, accounts page.
 app.rs     State, messages, update loop.
 key_bind.rs Keyboard shortcuts — read by both the menu bar and the key handler.
 reminders/ Trigger scheduling (pure, tested), delivery, ownership arbitration.
+background.rs Sync and feed passes, one at a time, and the bus interface the app asks them over.
+clock.rs   "Now" in the store's zone, and following a system timezone change.
 bin/       applet, daemon, launcher — thin shells over the library above.
 config.rs  Settings, via cosmic-config.
 
@@ -199,9 +204,11 @@ desktop has blur switched off".
 ## Reminders
 
 Each event's own `VALARM` triggers are honoured — parsed on read, written back on save, so alarms set
-in another client survive a round-trip. Settings offers a default lead time for events that carry no
-alarm of their own; it is off by default, because an app that starts notifying about everything
-without being asked is one people uninstall.
+in another client survive a round-trip — and the editor adds and removes them from the common
+presets, from "at the start" to a week before. Settings offers a default lead time for events that
+carry no alarm of their own, per calendar or app-wide; it is off by default, because an app that
+starts notifying about everything without being asked is one people uninstall. The sweep looks two
+weeks and a day ahead, so a reminder days before its event fires on time.
 
 Delivery goes through `org.freedesktop.Notifications`, which `cosmic-notifications` implements, so
 reminders land in COSMIC's own notification centre with no COSMIC-specific code.
@@ -209,14 +216,18 @@ reminders land in COSMIC's own notification centre with no COSMIC-specific code.
 Two deliberate details: a reminder fires at most once per occurrence (two instances of a weekly
 series are distinct reminders, but re-reading the same file is not), and a trigger more than five
 minutes stale is dropped — otherwise opening the app in the evening would replay the whole day.
+*Snooze* on the notification brings a reminder back ten minutes later, from whichever of the app
+and the daemon is running by then.
 
 ## Desktop integration
 
-**Reminders with the window closed.** `slate-daemon` does nothing but watch the vdir and
-notify. Both it and the app can see the same events, so they arbitrate over a D-Bus name: the daemon
-claims `com.magnetaros.Slate.Reminders` at startup, and the app checks for it and stays
-quiet while it is held. A second daemon bows out with a success exit code, because failing would put
-systemd's `Restart=on-failure` into a loop.
+**Reminders with the window closed.** `slate-daemon` watches the vdir, fires reminders and runs
+sync. Both it and the app can see the same events, so they arbitrate over a D-Bus name: the daemon
+claims `com.magnetaros.Slate.Reminders` at startup, and the app follows that name for as long as it
+runs — quiet while it is held, firing reminders itself the moment it is released, and asking the
+daemon to sync rather than syncing beside it. What has fired is recorded on disk, so neither a
+restart nor a hand-over shows a reminder twice. A second daemon bows out with a success exit code,
+because failing would put systemd's `Restart=on-failure` into a loop.
 
 **One window, whatever opens it.** The app runs through libcosmic's
 `run_single_instance`, which serves `org.freedesktop.Application` on

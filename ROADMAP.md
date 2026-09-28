@@ -69,8 +69,10 @@ inexpressible RRULEs is exactly what overrides need.
       only properties it understands, the patcher preserves the rest.
 - [x] *This and following*: truncate master with `UNTIL`, emit successor series, re-home
       overrides after the split, single atomic write.
-- [x] *All events*: edit master, keep overrides valid, drop/remap orphans only with explicit
-      confirmation.
+- [ ] *All events*: edit master, keep overrides valid, drop/remap orphans only with explicit
+      confirmation. Exclusions (`EXDATE`) now move with the series and the all-day switch
+      applies; overrides still keep their old `RECURRENCE-ID` after a time shift, which needs
+      a substrate operation to enumerate and rewrite them (audit 2026-09-28, F-03).
 - [x] Delete gains the same three scopes (`EXDATE` / truncate / remove file).
 - [x] Undo journal groundwork — landed as whole-file before/after snapshots rather than
       patcher inverses: every mutation is already an atomic rewrite of one or two files and
@@ -164,10 +166,9 @@ because Envelope is in the family.
       one occurrence vs the series handled distinctly.
 - [x] Degrades to "import this .ics" without Envelope — the contract stays minimal so that
       remains true.
-- [x] After receive-side is solid: organizer send-side, then RFC 6638 free/busy.
-      Free/busy is in: events carry attendees and an organizer, the editor edits
+- [x] RFC 6638 free/busy: events carry attendees and an organizer, the editor edits
       them, and `cosmic_pim_sync::availability` asks the calendar's own account.
-      Organizer send-side remains — the substrate half (`itip::with_method`,
+- [ ] Organizer send-side — the substrate half (`itip::with_method`,
       `send_invitation`, `send_cancellation`) is there, unused by the app.
 
 *Exit: a Google-sent invite lands in Envelope, is accepted in Slate, and the organizer sees the
@@ -189,7 +190,8 @@ acceptance; a rescheduled single occurrence updates the right instance.*
       so contrast follows the active theme. Remaining: the month view's
       background "new event here" target and the task rows are still
       pointer-only, both pre-existing.
-- [ ] i18n beyond en/el — extract, document, invite translators.
+- [ ] Translations. Only the English catalogue exists (`i18n/en`); the quick-add grammar reads
+      Greek, the interface does not yet. Greek first, then extract, document, invite translators.
 - [ ] Parity matrix: every GNOME Calendar row green; no known data-loss bug open.
 
 ---
@@ -248,7 +250,7 @@ Scoreboard against the parity floor (GNOME Calendar) plus the differentiators. �
 | Meeting-link join | ✅ | ✅ event + notification | ✅ |
 | Reminders / VALARM round-trip | 🔶 | ✅ | ✅ |
 | Invitations (iMIP receive) | 🔶 read-only | ✅ accept/decline + reply | ✅ |
-| Free/busy (RFC 6638) | ⬜ (lacks it) | ⬜ | ⬜ M7+ |
+| Free/busy (RFC 6638) | ⬜ (lacks it) | ✅ attendee availability | ✅ |
 | Birthdays from contacts | ⬜ (lacks it) | ✅ | ✅ |
 | Tasks (VTODO) | ⬜ (separate app) | ✅ grouped list | ✅ deepen |
 | Import/export .ics, file-manager open | ✅ | ✅ | ✅ |
@@ -259,7 +261,8 @@ Scoreboard against the parity floor (GNOME Calendar) plus the differentiators. �
 
 **Where it stands:** every row the parity floor has is now green, and Slate is ahead of it on
 conflict resolution, undo, quick-add, secondary time zones, birthdays, tasks, the applet, and
-vdir interop. What remains is the year view (M5), free/busy (M7+), and the 1.0 work in M8.
+vdir interop. What remains is organizer send-side (M7+), override remapping on all-events edits
+(M1, substrate), and the 1.0 work in M8.
 
 ## Non-goals
 

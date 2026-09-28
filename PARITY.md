@@ -23,6 +23,12 @@ both save and delete) and the per-event timezone picker (separate start and
 end zones) have both landed, while 02-slate.md still lists them as gaps.
 The rows below reflect the code.
 
+**Re-checked against the code 2026-09-29** (after the 2026-09-28 audit): the
+rows for features that shipped since August — agenda and year views, in-app
+search, drag, undo, subscriptions, join buttons, conflicts, attendees,
+birthdays, per-calendar defaults, invitations, free/busy, reminders in the
+editor — now say so.
+
 ---
 
 ## Baseline: GNOME Calendar
@@ -37,7 +43,7 @@ before the baseline claim is true.
 | Month view | have | Infinite paging by month; GNOME's is infinite-scroll — a presentation difference, not a gap. |
 | Week view | have | |
 | Day view | have | Slate-only; GNOME Calendar has no day view. |
-| Agenda / schedule list | partial | Exists in the applet (next week) only; no in-app agenda. Slate M5. |
+| Agenda / schedule list | have | In-app agenda view (next 30 days), plus the applet's next week. |
 | Mini month / jump to date | have | |
 | Adaptive window, hideable sidebar | verify | Sidebar exists; behaviour at small widths not audited. |
 | Week numbers | have | `show_week_numbers` setting, off by default. |
@@ -49,9 +55,9 @@ before the baseline claim is true.
 |---|---|---|
 | Title, location, description, all-day, start/end | have | |
 | Per-event timezone | have | Start and end zones chosen separately (the flight case); all-day stays a DATE. Exceeds GNOME Calendar, whose editor has no TZ picker. |
-| Reminders set in the editor | verify | Slate honours and round-trips `VALARM`, but no editor UI for adding one was found in `src/ui/editor.rs`; GNOME Calendar offers preset reminders in its editor. If absent, this is a baseline gap. |
-| Join button for meeting links | gap | GNOME Calendar detects video-call URLs and offers Join. Slate M6 (Meet/Zoom/Teams/Jitsi/BBB from `LOCATION`/`DESCRIPTION`/`CONFERENCE`). |
-| Weather in the grid | gap | GNOME Calendar shows a forecast in month view. The one allowed exception to the no-frills rule: planned as optional, off by default, open-meteo (keyless). |
+| Reminders set in the editor | have | The editor lists an event's reminders and adds or removes them from presets (at the start up to a week before); without any, the calendar's default applies. |
+| Join button for meeting links | have | Meet/Zoom/Teams/Jitsi/BBB from `LOCATION`/`DESCRIPTION`, any `https` URI from `CONFERENCE`; on the event and on its reminder. |
+| Weather in the grid | gap | GNOME Calendar shows a forecast in month view. The one allowed exception to the no-frills rule: optional, off by default, open-meteo (keyless) — not scheduled; nothing user-critical waits on it. |
 
 ### Recurrence
 
@@ -77,7 +83,7 @@ before the baseline claim is true.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Display an invitation's attendees | gap | GNOME Calendar shows attendees read-only. Slate has no attendee surface at all; arrives with iMIP receive (M7). |
+| Display an invitation's attendees | have | The editor lists and edits attendees; invitations arrive over iMIP from Envelope. |
 
 ### Calendars and accounts
 
@@ -87,8 +93,8 @@ before the baseline claim is true.
 | Local calendars | have | vdir on disk; readable by khal, Thunderbird, vdirsyncer — GNOME Calendar's store is not. |
 | CalDAV accounts | have | Built in, no GOA dependency; accounts shared suite-wide, passwords in the keychain. |
 | Google / Nextcloud onboarding | verify | Nextcloud is plain CalDAV and should work; Google needs OAuth — whether the generic account form covers it is unverified. |
-| ICS feed subscription (URL) | gap | GNOME Calendar adds calendars from file or URL. The engine shipped in the substrate; Slate's UI (add-URL, refresh interval, read-only badge) is M3. |
-| Birthdays from contacts | gap | GNOME shows GOA-contact birthdays. Substrate `BDAY` synthesis is planned (cosmic-pim M1); Slate consumes it when it lands. |
+| ICS feed subscription (URL) | have | Subscribe by URL in Accounts; read-only, refreshed on each feed's own interval. |
+| Birthdays from contacts | have | From the suite's address books (Circle's), toggled in Settings. |
 
 ### Import / export
 
@@ -102,14 +108,14 @@ before the baseline claim is true.
 | Feature | Status | Notes |
 |---|---|---|
 | System-level search | have | pop-launcher plugin (`cal <query>`), one row per event; GNOME's equivalent is its Shell search provider. |
-| In-app search | gap | Launcher only, and windowed to −1/+6 months. In-app search over summary/location/description across all calendars is M5. |
+| In-app search | have | `Ctrl+F`: summary, location and description across visible calendars, six months back to a year ahead. |
 
 ### Direct manipulation and undo
 
 | Feature | Status | Notes |
 |---|---|---|
-| Drag to move an event | gap | GNOME Calendar supports it (without a scope prompt); Slate's drag arrives in M4 with the three-scope prompt. |
-| Undo a deletion | gap | GNOME Calendar shows an undo toast on delete. Slate's undo (M5) is broader — journal of the patcher's inverse, covering splits — but nothing exists yet. |
+| Drag to move an event | have | Move, resize and sweep-to-create on the time grid, with the scope prompt for a series. |
+| Undo a deletion | have | Undo/redo of every edit and delete this session, splits included; refused, not forced, when a file changed since. |
 
 ### Accessibility and keyboard
 
@@ -120,11 +126,9 @@ before the baseline claim is true.
 | Screen reader state | verify | Bounded by libcosmic's AccessKit support; not audited. |
 | Printing | — | Not a baseline row: GNOME Calendar cannot print either. Audited under the ceiling. |
 
-**Baseline summary.** Open baseline gaps: in-app agenda, ICS-subscription
-UI, in-app search, join buttons, drag-to-move, delete-undo, attendee
-display, contact birthdays, weather — plus one *verify* that could become a
-gap (reminders in the editor). None is data-loss-shaped by itself; the
-loss-shaped items are all verification debts, listed at the end.
+**Baseline summary.** One open baseline gap: weather, the optional
+exception. The remaining *verify* rows (adaptive window, Google onboarding,
+screen reader) are audits, not known gaps.
 
 ---
 
@@ -138,9 +142,9 @@ loses nothing they use.
 | Feature | Status | Notes |
 |---|---|---|
 | Day / week / month | have | |
-| Multiweek view | gap | No plan names it; the M5 agenda + year views cover the same "wider than a week" need differently. Candidate for an argued rejection once those exist. |
-| Year view | gap | Thunderbird lacks it too; Slate plans one with a density heatmap (M5). |
-| Today Pane (docked agenda) | partial | The applet is the equivalent surface, but lives in the panel, not the app; in-app agenda is M5. |
+| Multiweek view | rejected | The agenda and year views, both shipped, cover the same "wider than a week" need (audit 2026-09-28, O-14). |
+| Year view | have | Twelve mini months with a density heatmap; Thunderbird lacks it. |
+| Today Pane (docked agenda) | partial | The agenda view and the panel applet cover it; neither is docked beside the grid. |
 | Task view with filters | partial | Slate's task list has due/priority/percent and urgency-first ordering; Thunderbird adds filter tabs (today, overdue, next 7 days) and category filtering. |
 
 ### Event editing
@@ -155,7 +159,7 @@ loses nothing they use.
 | Show as busy/free (`TRANSP`) | gap | Meaningful mostly alongside free/busy scheduling (below). Preserved verbatim. |
 | Priority on events | gap | Tasks have priority; events don't surface it. |
 | Attachments (link URLs) | gap | `ATTACH` not surfaced. Preserved verbatim. |
-| Multiple reminders, custom offsets, before/after end | partial | Multiple `VALARM`s are honoured on read and preserved on write; authoring them in the editor is the open half (see the baseline *verify*). |
+| Multiple reminders, custom offsets, before/after end | partial | Several reminders per event, authored from presets; arbitrary offsets and end-relative or absolute triggers are not authorable, and the latter two are not fired (substrate). |
 | Event templates / duplicate | gap | Slate M6. |
 
 ### Recurrence
@@ -170,17 +174,17 @@ loses nothing they use.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Alarm dialog with snooze / dismiss | gap | Slate fires a notification and deliberately drops >5-min-stale triggers; there is no snooze. The missed-alarm digest on resume (M6) covers the suspend case, not snooze itself. |
-| Per-calendar default reminder | gap | M6, alongside per-calendar default duration. |
+| Alarm dialog with snooze / dismiss | have | Snooze (10 minutes) and dismiss on the notification; a snooze survives a restart and a hand-over between the app and the daemon. Stale triggers are still dropped, and the missed-alarm digest covers a suspend. |
+| Per-calendar default reminder | have | With per-calendar default duration, in Settings. |
 
 ### Invitations and scheduling
 
 | Feature | Status | Notes |
 |---|---|---|
-| Receive invitations, Accept/Tentative/Decline, reply to organizer | gap | The headline ceiling gap. Planned as receive-side iMIP over a minimal D-Bus contract with Envelope (M7); degrades to "import this .ics" without it. |
-| Organizer side: invite attendees, track PARTSTAT | gap | After receive-side (M7+). |
-| Updates and cancellations hitting the right occurrence | gap | Depends on the landed scoped-edit machinery; part of M7. |
-| Free/busy lookup (RFC 6638) | gap | Explicitly last (M7+), substrate scheduling module. |
+| Receive invitations, Accept/Tentative/Decline, reply to organizer | have | iMIP from Envelope over D-Bus, with a slot-conflict check; the reply goes back through Envelope, or "reply from your mail client" without it. Declining after accepting takes the copy off the calendar. |
+| Organizer side: invite attendees, track PARTSTAT | partial | Attendees are edited and their replies' PARTSTAT recorded; sending the invitations is not wired (M7+). |
+| Updates and cancellations hitting the right occurrence | have | `SEQUENCE` and `RECURRENCE-ID` honoured; an instance CANCEL cancels one occurrence. |
+| Free/busy lookup (RFC 6638) | have | Attendee availability from the calendar's own account. |
 | Counter-proposals | gap | Unplanned; small once iTIP reply exists. Candidate rejection if it never earns its UI. |
 
 ### Calendars and accounts
@@ -188,11 +192,11 @@ loses nothing they use.
 | Feature | Status | Notes |
 |---|---|---|
 | CalDAV | have | Built in; suite-shared accounts. |
-| ICS network calendar | partial | Thunderbird's is read/write; Slate's substrate feature is subscriptions (read-only), UI pending (M3). Read-only is the defensible scope — a feed you can write to is a sync engine wearing a costume. |
+| ICS network calendar | partial | Thunderbird's is read/write; Slate's is subscriptions (read-only). Read-only is the defensible scope — a feed you can write to is a sync engine wearing a costume. |
 | Offline use and cache | have | Arguably exceeds: local files *are* the truth; sync is the add-on, not the substrate. |
-| Per-calendar settings (colour, read-only, reminders toggle) | partial | Colour and visibility exist; a read-only flag exists in the model; per-calendar reminder defaults are M6. |
+| Per-calendar settings (colour, read-only, reminders toggle) | have | Visibility, default reminder and duration per calendar; a local calendar is renamed, recoloured and deleted in Settings; feeds are read-only. |
 | Per-account sync status and error surfacing | partial | Sync exists (`Ctrl+R`, background daemon); last-sync/failure/retry surfacing is M3. |
-| Conflict resolution UI | gap | Blocked purely on the substrate's conflict-record API (cosmic-pim M1). Thunderbird handles this weakly too, but the row stays a gap until it exists. |
+| Conflict resolution UI | have | Keep mine / take theirs, or choose per field when both sides changed different things. |
 | Exchange | verify | Thunderbird is finalizing native Exchange support. The substrate speaks DAV only, so Slate reaches Exchange exactly where a CalDAV gateway exists. If native EAS/EWS is ever wanted, it is a substrate decision, not Slate's. |
 
 ### Import / export
@@ -200,14 +204,14 @@ loses nothing they use.
 | Feature | Status | Notes |
 |---|---|---|
 | Import / export `.ics` | have | |
-| Export a whole calendar | verify | The export path exists; whether it covers a full calendar vs selected events was not confirmed. |
-| Printing (day/week/month/list layouts) | gap | Nothing planned in any Slate milestone. The honest options are a print row in a future milestone or a recorded rejection; today it is an unanswered hole against the ceiling. |
+| Export a whole calendar | have | One calendar at a time, chosen in the export dialog. |
+| Printing (day/week/month/list layouts) | gap | Deferred, recorded (audit 2026-09-28, O-11): no milestone yet; the answer is no longer missing, only unscheduled. |
 
 ### Search
 
 | Feature | Status | Notes |
 |---|---|---|
-| In-calendar search box and filter pane | gap | Launcher-only today; in-app search with a real results UI is M5. |
+| In-calendar search box and filter pane | partial | In-app search with a results list; no filter pane. |
 
 ### Extensibility and appearance
 
@@ -242,9 +246,10 @@ verification debts and one blocked feature are still loss-shaped:
    by Thunderbird, khal, and Evolution must display correctly (Slate M0).
    Showing a moved occurrence at its original time is data loss in the
    user's eyes, whatever the bytes say.
-3. **No conflict UI.** Until the substrate exposes conflict records and
-   Slate renders them, a genuine both-sides edit has no user-visible
-   resolution path. Blocked on cosmic-pim M1; the app half is Slate M3.
+3. **Overrides are not remapped on an all-events time shift.** Moving
+   every instance keeps each override's old `RECURRENCE-ID`, so it shows
+   beside the regenerated instance. Needs a substrate operation
+   (audit 2026-09-28, F-03).
 4. **Windows-timezone mapping is absent.** An Outlook-authored event whose
    `TZID` fails IANA lookup falls back to floating and displays at the
    wrong wall-clock time. Substrate work (cosmic-pim M1); trust-loss if
@@ -257,27 +262,18 @@ feature gaps, not loss risks. That property is the audit's best result.
 
 ## Ceiling gaps, ranked by how much they are missed
 
-1. **Invitations (iMIP receive, then reply).** The feature that separates
-   a work calendar from a personal one; nothing else on this list changes
-   what the app *is*. Planned, last, cross-repo (M7).
-2. **In-app search.** Daily-use friction for anyone with more than a
-   screenful of events; the launcher path is a workaround, not an answer.
+1. **Organizer send-side.** Receive, reply and free/busy are in; sending
+   invitations is the half that remains (M7+).
+2. **Search filters.** In-app search is in; a filter pane is not.
 3. **Custom recurrence authoring.** "Last Friday of the month" is a normal
    meeting; today Slate can keep it but not create it.
-4. **Snooze.** The single most-pressed button on a reminder dialog;
-   Slate's staleness-drop philosophy needs an answer for "not now" as well
-   as "too late".
-5. **ICS subscriptions UI.** Holiday and team feeds; the engine already
-   exists, which makes the missing UI the cheapest big win here.
-6. **The interop field set** (categories, status, privacy, show-as,
+4. **Custom reminder offsets and end-relative alarms.** Presets cover the
+   common cases; the rest round-trip but cannot be authored.
+5. **The interop field set** (categories, status, privacy, show-as,
    attachments). Individually small; together they are what a Thunderbird
    power user notices first in the editor.
-7. **Printing.** Unplanned and unrejected — the one row on this audit with
-   no recorded answer at all.
-8. **Conflict UI and sync-status surfacing.** Ranked below the daily
-   features only because conflicts are rare; when one happens, nothing
-   matters more.
-9. **Free/busy and organizer-side scheduling.** Completes the invitation
-   story; useless before item 1 exists.
-10. **Multiweek view, Today Pane, task filters.** Presentation breadth;
-    partially covered by the planned agenda and year views.
+6. **Printing.** Deferred, with no milestone.
+7. **Sync-status surfacing.** Per-account last sync and failures; the
+   conflict UI exists.
+8. **Today Pane, task filters.** Presentation breadth; partly covered by
+   the agenda view and the applet.

@@ -29,6 +29,25 @@ pub struct Group {
     pub entries: Vec<Entry>,
 }
 
+impl Group {
+    /// Whether every file still holds what this group left in it — its
+    /// `after` side when undoing, its `before` when redoing. `current` holds
+    /// each entry's file as it is now, in entry order (`None`: absent).
+    ///
+    /// Anything else means the file changed since — a sync pulled the
+    /// server's edit, another client wrote it — and restoring the journaled
+    /// bytes would silently discard that change, then queue the discard for
+    /// upload with the server's text as its merge base.
+    #[must_use]
+    pub fn applies_cleanly(&self, undo: bool, current: &[Option<String>]) -> bool {
+        self.entries.len() == current.len()
+            && self.entries.iter().zip(current).all(|(entry, now)| {
+                let left = if undo { &entry.after } else { &entry.before };
+                now == left
+            })
+    }
+}
+
 /// Groups kept per direction; enough for a session, small enough to forget.
 const CAP: usize = 50;
 
@@ -101,6 +120,34 @@ mod tests {
         let mut history = History::default();
         history.record(vec![entry(Some("same"), Some("same"))]);
         assert!(history.pop_undo().is_none());
+    }
+
+    #[test]
+    fn an_untouched_file_undoes_and_redoes() {
+        let group = Group {
+            entries: vec![entry(Some("v1"), Some("v2"))],
+        };
+        assert!(group.applies_cleanly(true, &[Some("v2".into())]));
+        assert!(group.applies_cleanly(false, &[Some("v1".into())]));
+    }
+
+    #[test]
+    fn a_file_changed_since_is_not_restored_over() {
+        // The user's edit made v2; a sync then pulled the server's v3.
+        let group = Group {
+            entries: vec![entry(Some("v1"), Some("v2"))],
+        };
+        assert!(!group.applies_cleanly(true, &[Some("v3".into())]));
+    }
+
+    #[test]
+    fn a_created_file_that_was_since_removed_is_not_resurrected_by_redo() {
+        let group = Group {
+            entries: vec![entry(None, Some("new"))],
+        };
+        // Undo removed it; something then wrote a different file there.
+        assert!(!group.applies_cleanly(false, &[Some("other".into())]));
+        assert!(group.applies_cleanly(false, &[None]));
     }
 
     #[test]

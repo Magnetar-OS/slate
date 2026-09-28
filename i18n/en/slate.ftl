@@ -302,6 +302,9 @@ undo = Undo
 redo = Redo
 undo-done = Change undone
 redo-done = Change redone
+undo-stale = Can't undo: the event has changed since, perhaps by a sync. Undoing would discard that change.
+redo-stale = Can't redo: the event has changed since. Redoing would discard that change.
+history-incomplete = Only part of the change could be restored. Not restored: { $files }
 
 ## Search
 find = Find…

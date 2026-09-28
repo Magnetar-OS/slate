@@ -71,6 +71,9 @@ All notable user-facing changes to Slate. The format follows
   one on disk.
 - Editing an event whose time is floating or in UTC keeps it that way, instead
   of pinning it to the local time zone.
+- Undo and redo refuse, with a message, when the event has changed since
+  (for example by a sync) instead of overwriting that change, and say when
+  only part of a change could be restored.
 
 ## [1.1.0] - 2026-09-22
 

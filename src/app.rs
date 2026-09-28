@@ -3890,28 +3890,50 @@ impl AppModel {
             return Task::none();
         };
 
+        // Where each file lives now; a calendar that no longer exists has
+        // nowhere to restore into.
+        let paths: Option<Vec<std::path::PathBuf>> = group
+            .entries
+            .iter()
+            .map(|entry| {
+                self.store
+                    .as_ref()
+                    .and_then(|s| s.calendar(&entry.calendar_id))
+                    .map(|meta| meta.path.join(&entry.file_name))
+            })
+            .collect();
+        // A group whose files moved on since cannot be applied without
+        // throwing that change away. It is dropped rather than kept: it would
+        // refuse again on every attempt and block the steps behind it.
+        let Some(paths) = paths else {
+            return self.toast_error(&if undo {
+                fl!("undo-stale")
+            } else {
+                fl!("redo-stale")
+            });
+        };
+        let current: Vec<Option<String>> = paths
+            .iter()
+            .map(|path| std::fs::read_to_string(path).ok())
+            .collect();
+        if !group.applies_cleanly(undo, &current) {
+            return self.toast_error(&if undo {
+                fl!("undo-stale")
+            } else {
+                fl!("redo-stale")
+            });
+        }
+
         let mut queued = Ok(());
-        for entry in &group.entries {
-            let Some(meta) = self
-                .store
-                .as_ref()
-                .and_then(|s| s.calendar(&entry.calendar_id))
-                .cloned()
-            else {
-                tracing::warn!(
-                    calendar = entry.calendar_id,
-                    "cannot restore into a calendar that no longer exists"
-                );
-                continue;
-            };
-            let path = meta.path.join(&entry.file_name);
-            let current = std::fs::read_to_string(&path).ok();
+        let mut failed = Vec::new();
+        for ((entry, path), current) in group.entries.iter().zip(&paths).zip(current) {
             let desired = if undo { &entry.before } else { &entry.after };
 
             match desired {
                 Some(bytes) => {
                     if let Err(why) = cosmic_pim_core::atomic::write(&path, bytes, None) {
                         tracing::warn!(%why, file = entry.file_name, "history restore failed");
+                        failed.push(entry.file_name.clone());
                         continue;
                     }
                     queued = queued.and(queue_writeback_file(
@@ -3925,6 +3947,7 @@ impl AppModel {
                         && why.kind() != std::io::ErrorKind::NotFound
                     {
                         tracing::warn!(%why, file = entry.file_name, "history removal failed");
+                        failed.push(entry.file_name.clone());
                         continue;
                     }
                     queued = queued.and(queue_writeback_delete_file(
@@ -3942,14 +3965,15 @@ impl AppModel {
         self.reload();
         self.reload_tasks();
         let unqueued = self.report_unqueued(queued);
-        Task::batch([
-            self.toast(&if undo {
-                fl!("undo-done")
-            } else {
-                fl!("redo-done")
-            }),
-            unqueued,
-        ])
+        // Said as it is: a partly applied step is not "undone".
+        let outcome = if !failed.is_empty() {
+            self.toast_error(&fl!("history-incomplete", files = failed.join(", ")))
+        } else if undo {
+            self.toast(&fl!("undo-done"))
+        } else {
+            self.toast(&fl!("redo-done"))
+        };
+        Task::batch([outcome, unqueued])
     }
 
     /// Recomputes search results for `query`: summaries and locations across

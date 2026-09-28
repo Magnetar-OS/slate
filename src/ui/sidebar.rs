@@ -2,7 +2,6 @@
 
 //! The sidebar: a mini month for jumping around, and the calendar list.
 
-use super::color;
 use crate::app::Message;
 use crate::config::Config;
 use crate::fl;

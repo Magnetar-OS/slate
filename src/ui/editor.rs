@@ -444,7 +444,7 @@ impl Editor {
         event.end = end;
         event.rrule = rrule;
         event.attendees = self.attendees.clone();
-        event.alarms = self.alarms.clone();
+        event.alarms.clone_from(&self.alarms);
         event.last_modified = Some(chrono::Utc::now());
 
         Ok(event)

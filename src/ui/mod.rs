@@ -291,6 +291,7 @@ pub fn now_dot() -> cosmic::theme::Container<'static> {
 
 /// A colour as a rounded square: filled, or an outline when not — a
 /// calendar hidden in the sidebar, a colour not chosen in a picker.
+#[must_use]
 pub fn swatch<'a, M: 'a>(rgb: Rgb, filled: bool, size: f32) -> cosmic::Element<'a, M> {
     cosmic::widget::container(
         cosmic::widget::Space::new()

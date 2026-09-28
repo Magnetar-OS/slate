@@ -4180,7 +4180,7 @@ impl AppModel {
 
             match desired {
                 Some(bytes) => {
-                    if let Err(why) = cosmic_pim_core::atomic::write(&path, bytes, None) {
+                    if let Err(why) = cosmic_pim_core::atomic::write(path, bytes, None) {
                         tracing::warn!(%why, file = entry.file_name, "history restore failed");
                         failed.push(entry.file_name.clone());
                         continue;
@@ -4192,7 +4192,7 @@ impl AppModel {
                     ));
                 }
                 None => {
-                    if let Err(why) = std::fs::remove_file(&path)
+                    if let Err(why) = std::fs::remove_file(path)
                         && why.kind() != std::io::ErrorKind::NotFound
                     {
                         tracing::warn!(%why, file = entry.file_name, "history removal failed");

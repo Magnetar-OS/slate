@@ -15,6 +15,9 @@ All notable user-facing changes to Slate. The format follows
 - Saving an event without touching its repeat settings keeps its recurrence
   rule exactly as written; a rule from another client could previously gain
   or lose its last occurrence.
+- Changing *all events* of a series: deleted occurrences stay deleted when the
+  time moves, and switching the series to or from all-day now takes effect
+  instead of writing a 24-hour timed block or an invalid all-day end.
 
 ## [1.1.0] - 2026-09-22
 

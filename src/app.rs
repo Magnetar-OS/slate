@@ -4202,21 +4202,7 @@ impl AppModel {
                 over
             }
 
-            // The whole series. The editor's dates showed the *clicked
-            // instance*, so what the user expressed is a shift of that
-            // instance — apply the same shift to the series' start, and its
-            // new length directly.
-            EditScope::All => {
-                let occurrence_start = instant.with_timezone(&local).naive_local();
-                let edited_start = edited.start.naive_local(local);
-                let shift = edited_start - occurrence_start;
-                let length = edited.end.naive_local(local) - edited_start;
-
-                let mut series = edited;
-                series.start = shift_time(master.start, shift);
-                series.end = shift_time(series.start, length);
-                series
-            }
+            EditScope::All => whole_series_edit(&master, edited, instant, local),
 
             EditScope::Following => unreachable!("handled above"),
         };
@@ -4774,6 +4760,65 @@ fn shift_time(t: crate::model::EventTime, delta: chrono::Duration) -> crate::mod
     }
 }
 
+/// The series an "all events" edit writes, from the fields the editor showed
+/// for one clicked instance of it.
+///
+/// The editor's dates showed the *clicked instance*, so what the user
+/// expressed is a change to that instance; the series takes the same change
+/// from its own first instance:
+///
+/// - **Same kind** (timed stays timed, all-day stays all-day): the wall-clock
+///   shift between the instance as it was and as edited moves the series'
+///   start in its own zone, and the edited length sets its end.
+/// - **Kind changed** (the all-day switch was flipped): the edited instance's
+///   own start and end — its kind, zone and time — move back to the series'
+///   first date. Shifting the old start would keep the old kind and write a
+///   24-hour timed block, or an all-day `DTEND` equal to its `DTSTART`.
+///
+/// `EXDATE`s live in the series' own value space, so they move by exactly the
+/// amount the start moved — otherwise every exclusion stops matching the
+/// instance it removed, and deleted occurrences come back.
+fn whole_series_edit(
+    master: &crate::model::Event,
+    edited: crate::model::Event,
+    instant: chrono::DateTime<chrono::Utc>,
+    local: chrono_tz::Tz,
+) -> crate::model::Event {
+    let occurrence_start = instant.with_timezone(&local).naive_local();
+    let edited_start = edited.start.naive_local(local);
+
+    let mut series = edited;
+    if series.start.is_all_day() == master.start.is_all_day() {
+        let shift = edited_start - occurrence_start;
+        let length = series.end.naive_local(local) - edited_start;
+        series.start = shift_time(master.start, shift);
+        series.end = shift_time(series.start, length);
+    } else {
+        let back = Duration::days(
+            (occurrence_start.date() - master.start.naive_local(local).date()).num_days(),
+        );
+        series.start = shift_time(series.start, -back);
+        series.end = shift_time(series.end, -back);
+    }
+
+    let moved = own_wall_clock(series.start) - own_wall_clock(master.start);
+    series.exdates = master
+        .exdates
+        .iter()
+        .map(|exdate| *exdate + moved)
+        .collect();
+    series
+}
+
+/// A time's value in its own frame — the space `EXDATE`s are written in.
+fn own_wall_clock(t: crate::model::EventTime) -> NaiveDateTime {
+    use crate::model::EventTime;
+    match t {
+        EventTime::Date(d) => d.and_time(NaiveTime::MIN),
+        EventTime::Floating(dt) | EventTime::Zoned(dt, _) => dt,
+    }
+}
+
 /// Queues a deleted event for removal on its CalDAV server, if it had one.
 fn queue_writeback_delete(event: &crate::model::Event) {
     let root = crate::store::vdir::default_root();
@@ -4980,6 +5025,99 @@ mod tests {
         for delta in 1..=24 {
             assert_eq!(add_months(add_months(d, delta), -delta), d);
         }
+    }
+
+    /// A weekly series from Tuesday 4 Aug 2026, with the 11 Aug instance
+    /// deleted, in Athens — the viewer's own zone.
+    fn weekly_series(
+        start: crate::model::EventTime,
+        end: crate::model::EventTime,
+    ) -> crate::model::Event {
+        let mut master =
+            crate::model::Event::draft("personal", at(2026, 8, 4, 9, 0), chrono_tz::Europe::Athens);
+        master.summary = "Standup".into();
+        master.start = start;
+        master.end = end;
+        master.rrule = Some("FREQ=WEEKLY".into());
+        master.exdates = vec![own_wall_clock(start) + Duration::days(7)];
+        master
+    }
+
+    /// The instant of the 18 Aug instance, as a grid click hands it over.
+    fn clicked(wall: NaiveDateTime) -> chrono::DateTime<chrono::Utc> {
+        use chrono::TimeZone;
+        chrono_tz::Europe::Athens
+            .from_local_datetime(&wall)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn moving_every_instance_keeps_the_deleted_one_deleted() {
+        use crate::model::EventTime;
+        let athens = chrono_tz::Europe::Athens;
+        let master = weekly_series(
+            EventTime::Zoned(at(2026, 8, 4, 9, 0), athens),
+            EventTime::Zoned(at(2026, 8, 4, 10, 0), athens),
+        );
+        let mut edited = master.clone();
+        edited.start = EventTime::Zoned(at(2026, 8, 18, 10, 0), athens);
+        edited.end = EventTime::Zoned(at(2026, 8, 18, 11, 0), athens);
+
+        let series = whole_series_edit(&master, edited, clicked(at(2026, 8, 18, 9, 0)), athens);
+
+        assert_eq!(
+            series.start,
+            EventTime::Zoned(at(2026, 8, 4, 10, 0), athens)
+        );
+        assert_eq!(series.end, EventTime::Zoned(at(2026, 8, 4, 11, 0), athens));
+        assert_eq!(
+            series.exdates,
+            vec![at(2026, 8, 11, 10, 0)],
+            "the exclusion no longer matches the instance it deleted"
+        );
+    }
+
+    #[test]
+    fn switching_a_timed_series_to_all_day_writes_dates() {
+        use crate::model::EventTime;
+        let athens = chrono_tz::Europe::Athens;
+        let master = weekly_series(
+            EventTime::Zoned(at(2026, 8, 4, 9, 0), athens),
+            EventTime::Zoned(at(2026, 8, 4, 10, 0), athens),
+        );
+        let mut edited = master.clone();
+        edited.start = EventTime::Date(day(2026, 8, 18));
+        edited.end = EventTime::Date(day(2026, 8, 19));
+
+        let series = whole_series_edit(&master, edited, clicked(at(2026, 8, 18, 9, 0)), athens);
+
+        assert_eq!(series.start, EventTime::Date(day(2026, 8, 4)));
+        assert_eq!(series.end, EventTime::Date(day(2026, 8, 5)));
+        assert_eq!(series.exdates, vec![at(2026, 8, 11, 0, 0)]);
+    }
+
+    #[test]
+    fn switching_an_all_day_series_to_timed_writes_times() {
+        use crate::model::EventTime;
+        let athens = chrono_tz::Europe::Athens;
+        let master = weekly_series(
+            EventTime::Date(day(2026, 8, 4)),
+            EventTime::Date(day(2026, 8, 5)),
+        );
+        let mut edited = master.clone();
+        edited.start = EventTime::Zoned(at(2026, 8, 18, 9, 0), athens);
+        edited.end = EventTime::Zoned(at(2026, 8, 18, 10, 0), athens);
+
+        let series = whole_series_edit(&master, edited, clicked(at(2026, 8, 18, 0, 0)), athens);
+
+        assert_eq!(series.start, EventTime::Zoned(at(2026, 8, 4, 9, 0), athens));
+        assert_eq!(
+            series.end,
+            EventTime::Zoned(at(2026, 8, 4, 10, 0), athens),
+            "an all-day DTEND equal to its DTSTART is not an event"
+        );
+        assert_eq!(series.exdates, vec![at(2026, 8, 11, 9, 0)]);
     }
 
     #[test]

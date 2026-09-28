@@ -5,6 +5,10 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Rename, recolour and delete calendars kept on this computer, in Settings.
+
 ### Changed
 
 - The invitation dialog shows its date as the rest of the app does ("Tue 4

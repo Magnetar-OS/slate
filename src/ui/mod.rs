@@ -289,6 +289,38 @@ pub fn now_dot() -> cosmic::theme::Container<'static> {
     })
 }
 
+/// A colour as a rounded square: filled, or an outline when not — a
+/// calendar hidden in the sidebar, a colour not chosen in a picker.
+pub fn swatch<'a, M: 'a>(rgb: Rgb, filled: bool, size: f32) -> cosmic::Element<'a, M> {
+    cosmic::widget::container(
+        cosmic::widget::Space::new()
+            .width(cosmic::iced::Length::Fixed(size))
+            .height(cosmic::iced::Length::Fixed(size)),
+    )
+    .class(swatch_style(rgb, filled))
+    .into()
+}
+
+fn swatch_style(rgb: Rgb, filled: bool) -> cosmic::theme::Container<'static> {
+    cosmic::theme::Container::custom(move |theme| {
+        let cosmic = theme.cosmic();
+        let mut fill = color(rgb);
+        if !filled {
+            fill.a = 0.0;
+        }
+
+        cosmic::iced::widget::container::Style {
+            background: Some(cosmic::iced::Background::Color(fill)),
+            border: cosmic::iced::Border {
+                radius: cosmic.corner_radii.radius_xs.into(),
+                width: 1.5,
+                color: color(rgb),
+            },
+            ..Default::default()
+        }
+    })
+}
+
 /// An event, tinted with its calendar's colour.
 ///
 /// The tint is kept low-alpha so the compositor's blur still reads through it;

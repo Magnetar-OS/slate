@@ -135,6 +135,10 @@ pub struct AppModel {
     pending_feed_removal: Option<String>,
     /// An account the user asked to remove, awaiting the confirm dialog.
     pending_account_removal: Option<String>,
+    /// A local calendar the user asked to delete, awaiting the confirm dialog.
+    pending_calendar_removal: Option<String>,
+    /// Names being typed for local calendars, by id, until committed.
+    calendar_name_drafts: HashMap<String, String>,
     /// The export dialog's chosen calendar, by index into `calendars()`;
     /// `Some` shows the dialog.
     export_choice: Option<usize>,
@@ -238,6 +242,14 @@ pub enum Message {
     AccountUrlChanged(String),
     AccountUsernameChanged(String),
     AccountPasswordChanged(String),
+    // Local calendars: (id, typed name), (id), (id, palette index), (id)
+    CalendarNameInput(String, String),
+    CalendarNameCommit(String),
+    CalendarRecolor(String, usize),
+    CalendarDeleteRequest(String),
+    CalendarDeleteConfirm,
+    CalendarDeleteCancel,
+
     /// Asks to remove the account with this id; confirmed through a dialog
     /// before anything is deleted.
     AccountRemoveRequest(String),
@@ -948,6 +960,8 @@ impl cosmic::Application for AppModel {
             sub_form: None,
             pending_feed_removal: None,
             pending_account_removal: None,
+            pending_calendar_removal: None,
+            calendar_name_drafts: HashMap::new(),
             export_choice: None,
             refreshing_feeds: false,
             last_feed_check: None,
@@ -1209,6 +1223,28 @@ impl cosmic::Application for AppModel {
                     )
                     .secondary_action(
                         widget::button::text(fl!("cancel")).on_press(Message::SubRemoveCancel),
+                    )
+                    .into(),
+            );
+        }
+
+        // Deleting a calendar deletes its events and tasks with it.
+        if let Some(id) = &self.pending_calendar_removal {
+            let name = self
+                .store
+                .as_ref()
+                .and_then(|s| s.calendar(id))
+                .map_or_else(|| id.clone(), |meta| meta.name.clone());
+            return Some(
+                widget::dialog()
+                    .title(fl!("delete-calendar-title"))
+                    .body(fl!("delete-calendar-body", name = name))
+                    .primary_action(
+                        widget::button::destructive(fl!("delete"))
+                            .on_press(Message::CalendarDeleteConfirm),
+                    )
+                    .secondary_action(
+                        widget::button::text(fl!("cancel")).on_press(Message::CalendarDeleteCancel),
                     )
                     .into(),
             );
@@ -1502,6 +1538,8 @@ impl cosmic::Application for AppModel {
             self.pending_feed_removal = None;
         } else if self.pending_account_removal.is_some() {
             self.pending_account_removal = None;
+        } else if self.pending_calendar_removal.is_some() {
+            self.pending_calendar_removal = None;
         } else if self.export_choice.is_some() {
             self.export_choice = None;
         } else if self.scope_prompt.is_some() {
@@ -1913,6 +1951,43 @@ impl cosmic::Application for AppModel {
                 };
                 return self.toast_info(&text);
             }
+
+            Message::CalendarNameInput(id, name) => {
+                self.calendar_name_drafts.insert(id, name);
+            }
+            Message::CalendarNameCommit(id) => {
+                let Some(name) = self.calendar_name_drafts.remove(&id) else {
+                    return Task::none();
+                };
+                let name = name.trim().to_owned();
+                let Some(color) = self
+                    .store
+                    .as_ref()
+                    .and_then(|s| s.calendar(&id))
+                    .map(|c| c.color)
+                else {
+                    return Task::none();
+                };
+                if name.is_empty() {
+                    return Task::none();
+                }
+                return self.update_local_calendar(&id, &name, color);
+            }
+            Message::CalendarRecolor(id, index) => {
+                let (Some(name), Some(color)) = (
+                    self.store
+                        .as_ref()
+                        .and_then(|s| s.calendar(&id))
+                        .map(|c| c.name.clone()),
+                    PALETTE.get(index).copied(),
+                ) else {
+                    return Task::none();
+                };
+                return self.update_local_calendar(&id, &name, color);
+            }
+            Message::CalendarDeleteRequest(id) => self.pending_calendar_removal = Some(id),
+            Message::CalendarDeleteCancel => self.pending_calendar_removal = None,
+            Message::CalendarDeleteConfirm => return self.delete_local_calendar(),
 
             Message::AccountRemoveRequest(id) => self.pending_account_removal = Some(id),
             Message::AccountRemoveCancel => self.pending_account_removal = None,
@@ -3032,6 +3107,7 @@ impl AppModel {
         widget::column::with_capacity(2)
             .spacing(cosmic::theme::spacing().space_m)
             .push(general)
+            .push(self.local_calendars_view())
             .push(self.calendar_defaults_view())
             .apply(widget::scrollable)
             .into()
@@ -3042,6 +3118,134 @@ impl AppModel {
     /// Only writable calendars appear: a read-only feed cannot hold a new
     /// event, so a default duration for one would be an offer that cannot be
     /// taken. Its reminders still follow the app-wide setting.
+    /// Whether `calendar` is this computer's own: writable, and bound to no
+    /// account. Only those are renamed, recoloured and deleted here — a
+    /// server calendar's name and colour are the server's, and deleting its
+    /// folder would only have the next sync bring it back.
+    fn is_local_calendar(&self, calendar: &CalendarMeta) -> bool {
+        !calendar.read_only
+            && self.accounts.as_ref().is_none_or(|accounts| {
+                cosmic_pim_sync::account_for_collection(accounts, &calendar.id).is_none()
+            })
+    }
+
+    /// Renames and/or recolours a local calendar.
+    fn update_local_calendar(
+        &mut self,
+        id: &str,
+        name: &str,
+        color: crate::model::Rgb,
+    ) -> Task<cosmic::Action<Message>> {
+        if !self
+            .store
+            .as_ref()
+            .and_then(|s| s.calendar(id))
+            .is_some_and(|calendar| self.is_local_calendar(calendar))
+        {
+            return Task::none();
+        }
+        let Some(store) = self.store.as_mut() else {
+            return Task::none();
+        };
+        match store.update_calendar(id, name, color) {
+            Ok(()) => {
+                self.sync_sidebar();
+                self.reload();
+                Task::none()
+            }
+            Err(why) => self.toast_error(&why.to_string()),
+        }
+    }
+
+    /// Deletes the local calendar the confirm dialog asked about, events and
+    /// tasks with it. Not journaled: undo restores files, not collections.
+    fn delete_local_calendar(&mut self) -> Task<cosmic::Action<Message>> {
+        let Some(id) = self.pending_calendar_removal.take() else {
+            return Task::none();
+        };
+        let Some(meta) = self.store.as_ref().and_then(|s| s.calendar(&id)).cloned() else {
+            return Task::none();
+        };
+        // Checked again at the point of no return: only ever this computer's
+        // own calendar, never a feed or one a server holds.
+        if !self.is_local_calendar(&meta) {
+            return Task::none();
+        }
+        if let Err(why) = std::fs::remove_dir_all(&meta.path) {
+            return self.toast_error(&why.to_string());
+        }
+        if let Some(store) = self.store.as_mut()
+            && let Err(why) = store.refresh()
+        {
+            tracing::warn!(%why, "refresh after deleting a calendar failed");
+        }
+        self.sync_sidebar();
+        self.reload();
+        self.reload_tasks();
+        Task::none()
+    }
+
+    fn local_calendars_view(&self) -> Element<'_, Message> {
+        let local: Vec<&CalendarMeta> = self
+            .calendars()
+            .iter()
+            .filter(|calendar| self.is_local_calendar(calendar))
+            .collect();
+        if local.is_empty() {
+            return widget::Space::new().into();
+        }
+
+        let spacing = cosmic::theme::spacing();
+        let mut section = widget::settings::section().title(fl!("local-calendars"));
+        for calendar in local {
+            let id = calendar.id.clone();
+            let name = self
+                .calendar_name_drafts
+                .get(&calendar.id)
+                .cloned()
+                .unwrap_or_else(|| calendar.name.clone());
+
+            let mut swatches =
+                widget::row::with_capacity(PALETTE.len()).spacing(spacing.space_xxxs);
+            for (index, rgb) in PALETTE.iter().enumerate() {
+                swatches = swatches.push(
+                    widget::button::custom(crate::ui::swatch(*rgb, *rgb == calendar.color, 14.0))
+                        .class(cosmic::theme::Button::Icon)
+                        .padding(spacing.space_xxxs)
+                        .on_press(Message::CalendarRecolor(id.clone(), index)),
+                );
+            }
+
+            let for_input = id.clone();
+            let for_submit = id.clone();
+            section = section.add(
+                widget::column::with_capacity(2)
+                    .spacing(spacing.space_xxs)
+                    .push(
+                        widget::row::with_capacity(2)
+                            .spacing(spacing.space_xxs)
+                            .align_y(Alignment::Center)
+                            .push(
+                                widget::text_input(fl!("calendar-name"), name)
+                                    .on_input(move |text| {
+                                        Message::CalendarNameInput(for_input.clone(), text)
+                                    })
+                                    .on_submit(move |_| {
+                                        Message::CalendarNameCommit(for_submit.clone())
+                                    })
+                                    .width(Length::Fill),
+                            )
+                            .push(
+                                widget::button::destructive(fl!("delete"))
+                                    .on_press(Message::CalendarDeleteRequest(id.clone())),
+                            ),
+                    )
+                    .push(swatches),
+            );
+        }
+        section.into()
+    }
+
     fn calendar_defaults_view(&self) -> Element<'_, Message> {
         let writable: Vec<&CalendarMeta> = self
             .calendars()

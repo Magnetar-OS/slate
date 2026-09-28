@@ -61,6 +61,10 @@ time-format-24h = Use 24-hour time
 
 ## Per-calendar defaults
 calendar-defaults = Per-calendar defaults
+local-calendars = Calendars on this computer
+calendar-name = Calendar name
+delete-calendar-title = Delete this calendar?
+delete-calendar-body = “{ $name }” and every event and task in it will be deleted from this computer. This cannot be undone.
 calendar-default-inherit = Default reminder
 calendar-duration-default = 1 hour (default)
 duration-minutes = { $minutes } minutes

@@ -128,7 +128,7 @@ impl<'a> Sidebar<'a> {
         cosmic_ext_widgets::rail(self.calendars.iter().map(|calendar| {
             let visible = !self.config.is_hidden(&calendar.id);
             cosmic_ext_widgets::rail_item(
-                swatch(calendar, visible, 16.0),
+                super::swatch(calendar.color, visible, 16.0),
                 calendar.name.clone(),
                 false,
                 Message::ToggleCalendar(calendar.id.clone()),
@@ -140,7 +140,7 @@ impl<'a> Sidebar<'a> {
     fn calendar_row(&self, calendar: &'a CalendarMeta) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
         let visible = !self.config.is_hidden(&calendar.id);
-        let swatch = swatch(calendar, visible, 12.0);
+        let swatch = super::swatch(calendar.color, visible, 12.0);
 
         let mut label = widget::text::body(calendar.name.clone())
             .wrapping(cosmic::iced::core::text::Wrapping::None)
@@ -172,36 +172,4 @@ impl<'a> Sidebar<'a> {
             .on_press(Message::ToggleCalendar(calendar.id.clone()))
             .into()
     }
-}
-
-/// The calendar's colour as a rounded square: filled while it is shown, an
-/// outline while it is hidden.
-fn swatch<'a>(calendar: &CalendarMeta, visible: bool, size: f32) -> Element<'a, Message> {
-    widget::container(
-        widget::Space::new()
-            .width(Length::Fixed(size))
-            .height(Length::Fixed(size)),
-    )
-    .class(swatch_style(calendar.color, visible))
-    .into()
-}
-
-fn swatch_style(rgb: crate::model::Rgb, visible: bool) -> cosmic::theme::Container<'static> {
-    cosmic::theme::Container::custom(move |theme| {
-        let cosmic = theme.cosmic();
-        let mut fill = color(rgb);
-        if !visible {
-            fill.a = 0.0;
-        }
-
-        cosmic::iced::widget::container::Style {
-            background: Some(cosmic::iced::Background::Color(fill)),
-            border: cosmic::iced::Border {
-                radius: cosmic.corner_radii.radius_xs.into(),
-                width: 1.5,
-                color: color(rgb),
-            },
-            ..Default::default()
-        }
-    })
 }

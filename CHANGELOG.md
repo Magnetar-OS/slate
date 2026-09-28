@@ -76,6 +76,8 @@ All notable user-facing changes to Slate. The format follows
   only part of a change could be restored.
 - If saving a "this and following" edit fails after the series was split, the
   split still reaches the server and can be undone.
+- In-app search finds words in an event's description, not only in its title
+  and location.
 
 ## [1.1.0] - 2026-09-22
 

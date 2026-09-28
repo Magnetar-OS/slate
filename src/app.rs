@@ -651,6 +651,15 @@ fn default_export(calendars: &[CalendarMeta], config: &Config) -> usize {
         .unwrap_or(0)
 }
 
+/// Whether an occurrence answers a search for `needle` (already lowercased):
+/// in its summary, its location, or its event's `description`.
+fn matches_search(needle: &str, occurrence: &Occurrence, description: Option<&str>) -> bool {
+    let contains = |text: &str| text.to_lowercase().contains(needle);
+    contains(&occurrence.summary)
+        || occurrence.location.as_deref().is_some_and(contains)
+        || description.is_some_and(contains)
+}
+
 /// Adds a delivered invitation to the queue, once.
 ///
 /// Envelope delivers a REQUEST every time it sees the mail — a re-sync, a
@@ -3976,9 +3985,10 @@ impl AppModel {
         Task::batch([outcome, unqueued])
     }
 
-    /// Recomputes search results for `query`: summaries and locations across
-    /// every visible calendar, six months back and a year forward — wider
-    /// than the launcher plugin's window, nearest-first, one row per event.
+    /// Recomputes search results for `query`: summaries, locations and
+    /// descriptions across every visible calendar, six months back and a year
+    /// forward — wider than the launcher plugin's window, nearest-first, one
+    /// row per event.
     fn run_search(&mut self, query: &str) {
         self.search_results.clear();
         let needle = query.trim().to_lowercase();
@@ -3995,13 +4005,23 @@ impl AppModel {
             return;
         };
 
+        // Occurrences carry no description, so it is read from the event —
+        // once per event, not once per instance of a daily series. A series
+        // is searched by its master's description.
+        let mut descriptions: HashMap<(String, String), Option<String>> = HashMap::new();
         let mut hits: Vec<Occurrence> = occurrences
             .into_iter()
             .filter(|o| {
-                o.summary.to_lowercase().contains(&needle)
-                    || o.location
-                        .as_deref()
-                        .is_some_and(|l| l.to_lowercase().contains(&needle))
+                let description = descriptions
+                    .entry((o.calendar_id.clone(), o.uid.clone()))
+                    .or_insert_with(|| {
+                        store
+                            .event(&o.calendar_id, &o.uid)
+                            .ok()
+                            .flatten()
+                            .and_then(|event| event.description)
+                    });
+                matches_search(&needle, o, description.as_deref())
             })
             .collect();
 
@@ -5556,6 +5576,27 @@ mod tests {
         let mut config = Config::default();
         config.toggle_calendar("hidden");
         assert_eq!(default_export(&calendars, &config), 2);
+    }
+
+    #[test]
+    fn search_finds_a_word_that_is_only_in_the_description() {
+        let occurrence = Occurrence {
+            uid: "review".into(),
+            calendar_id: "work".into(),
+            summary: "Quarterly review".into(),
+            location: Some("Room 4".into()),
+            all_day: false,
+            start: at(2026, 8, 4, 9, 0),
+            end: at(2026, 8, 4, 10, 0),
+            recurrence_id: None,
+        };
+        assert!(matches_search(
+            "budget",
+            &occurrence,
+            Some("Bring the Budget numbers")
+        ));
+        assert!(!matches_search("budget", &occurrence, None));
+        assert!(matches_search("room 4", &occurrence, None));
     }
 
     #[test]

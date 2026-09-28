@@ -6,10 +6,15 @@
     ),
     icon: Some(Name("x-office-calendar")),
     query: (
-        // Only run when the query starts with "cal ", so the plugin does not
-        // search every keystroke typed into the launcher.
+        // Only run when the query starts with "cal ". pop-launcher routes a
+        // query to a plugin by its `regex`; a plugin without one receives
+        // every query, and this one would search the calendar on every
+        // keystroke typed into the launcher. `help` is only the hint shown.
+        regex: Some("^cal "),
         help: Some("cal "),
-        isolate: false,
+        // Once the user has typed the prefix they asked for events; other
+        // plugins' matches for "cal standup" are noise.
+        isolate: true,
         persistent: false,
         priority: Default,
     ),

@@ -20,6 +20,9 @@ All notable user-facing changes to Slate. The format follows
   instead of writing a 24-hour timed block or an invalid all-day end.
 - The panel applet lists the week in order: an all-day event later in the week
   no longer appears above today's meetings under a repeated date heading.
+- The launcher plugin answers only queries that start with `cal `. It had no
+  routing pattern, so it searched the calendar on every keystroke typed into
+  the launcher and mixed events into unrelated results.
 
 ## [1.1.0] - 2026-09-22
 

@@ -105,22 +105,12 @@ impl Plugin {
 
     /// Handles one request. Returns `false` when the launcher wants us to exit.
     fn handle(&mut self, request: &Value) -> bool {
-        // Unit variants arrive as bare strings.
-        if let Some(name) = request.as_str() {
-            match name {
-                "Exit" => return false,
-                // Interrupt cancels an in-flight search; ours are synchronous.
-                "Interrupt" | "Quit" => return true,
-                _ => return true,
-            }
+        match incoming(request) {
+            Incoming::Search(query) => self.search(query),
+            Incoming::Activate(id) => self.activate(id),
+            Incoming::Exit => return false,
+            Incoming::Other => {}
         }
-
-        if let Some(query) = request.get("Search").and_then(Value::as_str) {
-            self.search(query);
-        } else if let Some(id) = request.get("Activate").and_then(Value::as_u64) {
-            self.activate(id as usize);
-        }
-
         true
     }
 
@@ -186,17 +176,11 @@ impl Plugin {
         matches.truncate(MAX_RESULTS);
 
         for (id, occurrence) in matches.iter().enumerate() {
-            send(&json!({
-                "Append": {
-                    "id": id,
-                    "name": display_name(occurrence),
-                    "description": describe(occurrence, today, &self.config),
-                    "keywords": Value::Null,
-                    "icon": { "Name": "x-office-calendar" },
-                    "exec": Value::Null,
-                    "window": Value::Null,
-                }
-            }));
+            send(&append(
+                id,
+                &display_name(occurrence),
+                &describe(occurrence, today, &self.config),
+            ));
         }
 
         self.results = matches;
@@ -226,6 +210,47 @@ impl Plugin {
 
         send(&json!("Close"));
     }
+}
+
+/// What the launcher asked for, from one request line.
+#[derive(Debug, PartialEq, Eq)]
+enum Incoming<'a> {
+    Search(&'a str),
+    Activate(usize),
+    Exit,
+    /// Anything this plugin has nothing to do for: `Interrupt` (our searches
+    /// are synchronous), `Close`, `Quit`, context requests.
+    Other,
+}
+
+fn incoming(request: &Value) -> Incoming<'_> {
+    // Unit variants arrive as bare strings.
+    if request.as_str() == Some("Exit") {
+        return Incoming::Exit;
+    }
+    if let Some(query) = request.get("Search").and_then(Value::as_str) {
+        return Incoming::Search(query);
+    }
+    request
+        .get("Activate")
+        .and_then(Value::as_u64)
+        .and_then(|id| usize::try_from(id).ok())
+        .map_or(Incoming::Other, Incoming::Activate)
+}
+
+/// One result row, as pop-launcher's `PluginResponse::Append`.
+fn append(id: usize, name: &str, description: &str) -> Value {
+    json!({
+        "Append": {
+            "id": id,
+            "name": name,
+            "description": description,
+            "keywords": Value::Null,
+            "icon": { "Name": "x-office-calendar" },
+            "exec": Value::Null,
+            "window": Value::Null,
+        }
+    })
 }
 
 fn display_name(occurrence: &Occurrence) -> String {
@@ -278,4 +303,51 @@ fn load_config() -> Config {
             Err((_errors, config)) => config,
         })
         .unwrap_or_default()
+}
+
+/// The protocol is built by hand (see the module docs); these hold it to
+/// pop-launcher's own types, so a drift in either shows up here rather than
+/// as a plugin that silently shows nothing.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pop_launcher::{PluginResponse, Request};
+
+    #[test]
+    fn the_launchers_requests_are_understood() {
+        let search = serde_json::to_value(Request::Search("cal standup".into())).unwrap();
+        assert_eq!(incoming(&search), Incoming::Search("cal standup"));
+
+        let activate = serde_json::to_value(Request::Activate(3)).unwrap();
+        assert_eq!(incoming(&activate), Incoming::Activate(3));
+
+        let exit = serde_json::to_value(Request::Exit).unwrap();
+        assert_eq!(incoming(&exit), Incoming::Exit);
+
+        for other in [Request::Interrupt, Request::Close, Request::Quit(0)] {
+            let value = serde_json::to_value(other).unwrap();
+            assert_eq!(incoming(&value), Incoming::Other);
+        }
+    }
+
+    #[test]
+    fn our_responses_are_what_the_launcher_reads() {
+        let row = serde_json::from_value::<PluginResponse>(append(2, "Standup", "Today · 09:00"))
+            .unwrap();
+        let PluginResponse::Append(result) = row else {
+            panic!("not an Append: {row:?}");
+        };
+        assert_eq!(result.id, 2);
+        assert_eq!(result.name, "Standup");
+        assert_eq!(result.description, "Today · 09:00");
+
+        assert!(matches!(
+            serde_json::from_value::<PluginResponse>(json!("Finished")).unwrap(),
+            PluginResponse::Finished
+        ));
+        assert!(matches!(
+            serde_json::from_value::<PluginResponse>(json!("Close")).unwrap(),
+            PluginResponse::Close
+        ));
+    }
 }

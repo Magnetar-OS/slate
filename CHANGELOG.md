@@ -5,6 +5,11 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The invitation dialog shows its date as the rest of the app does ("Tue 4
+  August 09:00") rather than as an ISO date.
+
 ### Fixed
 
 - The main window responds to the mouse again when maximised (libcosmic

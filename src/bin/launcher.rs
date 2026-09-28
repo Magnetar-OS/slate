@@ -11,7 +11,7 @@
 //! `"Exit"` / `"Interrupt"`. Responses are `{"Append":{...}}` followed by
 //! `"Finished"`, or `"Close"` after activating a result.
 
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Duration, NaiveDate};
 use serde_json::{Value, json};
 use slate::config::Config;
 use slate::fl;
@@ -242,12 +242,7 @@ fn describe(occurrence: &Occurrence, today: NaiveDate, config: &Config) -> Strin
         0 => fl!("today"),
         1 => fl!("tomorrow"),
         -1 => fl!("yesterday"),
-        _ => format!(
-            "{} {} {}",
-            slate::ui::weekday_short(date.weekday()),
-            date.day(),
-            slate::ui::month_name(date.month())
-        ),
+        _ => slate::ui::format_day(date),
     };
 
     let when = if occurrence.all_day {

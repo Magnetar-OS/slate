@@ -3335,12 +3335,14 @@ impl AppModel {
         if let Some(event) = &invitation.event {
             let local = self.local_timezone();
             let start = event.start.naive_local(local);
+            // The same "Tue 4 August 09:00" the rest of the app shows, not
+            // an ISO date.
             let when = if event.start.is_all_day() {
-                start.date().to_string()
+                crate::ui::format_day(start.date())
             } else {
                 format!(
                     "{} {}",
-                    start.date(),
+                    crate::ui::format_day(start.date()),
                     crate::ui::format_time(start.time(), &self.config)
                 )
             };

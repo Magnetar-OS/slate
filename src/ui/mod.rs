@@ -429,6 +429,16 @@ pub fn format_date_short(date: NaiveDate) -> String {
     format!("{} {}", date.day(), month_name(date.month()))
 }
 
+/// A day as the app names one in running text: "Tue 4 August".
+#[must_use]
+pub fn format_day(date: NaiveDate) -> String {
+    format!(
+        "{} {}",
+        weekday_short(date.weekday()),
+        format_date_short(date)
+    )
+}
+
 /// The title shown in the header for a given view and anchor date.
 #[must_use]
 pub fn range_title(view: crate::config::ViewKind, anchor: NaiveDate, config: &Config) -> String {

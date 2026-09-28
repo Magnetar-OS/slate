@@ -61,11 +61,7 @@ impl Reminder {
         let fired_on = (self.start - self.lead).date();
         let when = if self.start.date() != fired_on {
             // A reminder days ahead: "At 14:00" would read as today.
-            let day = format!(
-                "{} {}",
-                crate::ui::weekday_short(chrono::Datelike::weekday(&self.start.date())),
-                crate::ui::format_date_short(self.start.date())
-            );
+            let day = crate::ui::format_day(self.start.date());
             if self.all_day {
                 day
             } else {

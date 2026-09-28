@@ -12,17 +12,36 @@
 //! way into the meeting, so its URI is trusted whatever the host
 //! ([`conference_link`]).
 
-/// Hosts (or host substrings) that identify a video-call link.
+/// Domains that identify a video-call link: the host is one of these, or a
+/// subdomain of one (`us02web.zoom.us`).
 const SERVICES: &[&str] = &[
     "meet.google.com",
     "zoom.us",
     "teams.microsoft.com",
     "teams.live.com",
     "meet.jit.si",
-    "jitsi",
-    "bigbluebutton",
-    "bbb.",
 ];
+
+/// Host labels that identify a self-hosted video-call server
+/// (`jitsi.example.org`, `bbb.uni.example`). Matched as whole labels, so
+/// `notjitsi.com` is not one.
+const SELF_HOSTED: &[&str] = &["jitsi", "bigbluebutton", "bbb"];
+
+/// Whether `host` is a known video-call service.
+///
+/// Whole domains and whole labels only: a substring test let
+/// `zoom.us.example.net` — anyone's host — earn a Join button.
+fn is_meeting_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    // A port or credentials are not part of the name.
+    let host = host.rsplit('@').next().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+
+    SERVICES
+        .iter()
+        .any(|domain| host == *domain || host.ends_with(&format!(".{domain}")))
+        || host.split('.').any(|label| SELF_HOSTED.contains(&label))
+}
 
 /// The first video-call URL found in `location` or `description`.
 #[must_use]
@@ -74,7 +93,7 @@ fn find_in(text: &str) -> Option<String> {
             .next()
             .unwrap_or_default();
 
-        if SERVICES.iter().any(|s| host.contains(s)) {
+        if is_meeting_host(host) {
             return Some(candidate.to_owned());
         }
     }
@@ -139,6 +158,30 @@ mod tests {
     fn a_dial_in_conference_is_not_a_link() {
         let lines = vec!["CONFERENCE;VALUE=URI;FEATURE=PHONE:tel:+1-555-0100".to_owned()];
         assert_eq!(conference_link(&lines), None);
+    }
+
+    #[test]
+    fn a_lookalike_host_is_not_a_meeting() {
+        for url in [
+            "https://zoom.us.example.net/j/1",
+            "https://notjitsi.com/room",
+            "https://evil-meet.google.com.example/x",
+            "https://bbbq.example.org/b/room",
+        ] {
+            assert_eq!(meeting_link(Some(url), None), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn self_hosted_servers_and_subdomains_are_meetings() {
+        for url in [
+            "https://jitsi.example.org/standup",
+            "https://bbb.uni.example/b/abc-123",
+            "https://us02web.zoom.us/j/123",
+            "https://ZOOM.US/j/5",
+        ] {
+            assert_eq!(meeting_link(Some(url), None).as_deref(), Some(url), "{url}");
+        }
     }
 
     #[test]

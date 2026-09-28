@@ -42,6 +42,8 @@ All notable user-facing changes to Slate. The format follows
 - "Sync now", adding an account and feed refreshes go through the background
   daemon while it runs, instead of starting a second sync pass beside it
   that could lose queued changes; reminders no longer wait on a sync pass.
+- A link whose host only contains a meeting service's name, such as
+  `zoom.us.example.net`, no longer gets a Join button.
 
 ## [1.1.0] - 2026-09-22
 

@@ -21,6 +21,7 @@
 //! double every notification, and the daemon stopping does not silence them.
 
 use cosmic_pim_accounts::AccountStore;
+use slate::clock::{follow_timezone, now_in};
 use slate::config::Config;
 use slate::reminders::{self, Scheduler, SleepWindow};
 use slate::store::{Store, watcher};
@@ -113,7 +114,7 @@ async fn main() -> std::process::ExitCode {
         .await;
     });
     // Where the sleep window being reported on began.
-    let mut sleep = SleepWindow::new(chrono::Local::now().naive_local());
+    let mut sleep = SleepWindow::new(now_in(store.local_timezone()));
     // `Delay` rather than `Burst`: after a suspend-resume the missed ticks must
     // not all fire at once and start several overlapping sync passes.
     sync_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -125,11 +126,15 @@ async fn main() -> std::process::ExitCode {
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                // A timezone change moves every occurrence's wall clock.
+                if let Err(why) = follow_timezone(&mut store) {
+                    tracing::warn!(%why, "could not follow the timezone change");
+                }
                 sleep.swept(check(&mut store, &mut scheduler));
             }
             Some(going_down) = sleep_rx.recv() => {
                 if going_down {
-                    sleep.going_down(chrono::Local::now().naive_local());
+                    sleep.going_down(now_in(store.local_timezone()));
                     continue;
                 }
                 // Back from suspend: say how many alarms passed, once, then
@@ -296,7 +301,7 @@ fn signals() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> 
 fn check(store: &mut Store, scheduler: &mut Scheduler) -> chrono::NaiveDateTime {
     // Re-read each pass so a settings change takes effect without a restart.
     let config = load_config();
-    let now = chrono::Local::now().naive_local();
+    let now = now_in(store.local_timezone());
 
     match reminders::due_reminders(store, scheduler, &config, now) {
         Ok(due) => {
@@ -320,7 +325,7 @@ async fn report_missed(
     slept_at: chrono::NaiveDateTime,
 ) {
     let config = load_config();
-    let now = chrono::Local::now().naive_local();
+    let now = now_in(store.local_timezone());
 
     match reminders::missed_reminders(store, scheduler, &config, slept_at, now) {
         Ok(missed) if missed > 0 => {

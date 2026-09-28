@@ -36,6 +36,9 @@ All notable user-facing changes to Slate. The format follows
   put it, not only in the location.
 - The summary of reminders missed during a suspend no longer comes up empty
   when a clock tick lands before the resume signal.
+- After a timezone change (travel, automatic time zone) reminders fire on time
+  and "today" is right without restarting the app, the panel applet or the
+  daemon.
 
 ## [1.1.0] - 2026-09-22
 

@@ -808,7 +808,9 @@ impl cosmic::Application for AppModel {
             }
         };
 
-        let today = chrono::Local::now().date_naive();
+        let now =
+            crate::clock::now_in(store.as_ref().map_or(chrono_tz::UTC, Store::local_timezone));
+        let today = now.date();
         // `--date` lets the applet and the launcher plugin open us on a specific day.
         let anchor = flags.initial_date.unwrap_or(today);
 
@@ -848,7 +850,7 @@ impl cosmic::Application for AppModel {
             fatal,
             anchor,
             today,
-            now: chrono::Local::now().naive_local(),
+            now,
             days: BTreeMap::new(),
             contact_cards,
             views,
@@ -883,7 +885,7 @@ impl cosmic::Application for AppModel {
             search_results: Vec::new(),
             history: crate::undo::History::default(),
             quick_add: None,
-            sleep: crate::reminders::SleepWindow::new(chrono::Local::now().naive_local()),
+            sleep: crate::reminders::SleepWindow::new(now),
             scope_prompt: None,
             toasts: widget::Toasts::new(Message::CloseToast),
             // Shared with the daemon, so a hand-over in either direction does
@@ -1501,7 +1503,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Today => {
-                self.today = chrono::Local::now().date_naive();
+                self.today = self.clock_now().date();
                 self.anchor = self.today;
                 self.sync_mini();
                 self.reload();
@@ -2117,7 +2119,7 @@ impl cosmic::Application for AppModel {
             }
 
             Message::Sleep(going_down) => {
-                self.now = chrono::Local::now().naive_local();
+                self.now = self.clock_now();
                 if going_down {
                     self.sleep.going_down(self.now);
                     return Task::none();
@@ -2217,9 +2219,20 @@ impl cosmic::Application for AppModel {
             Message::ScrollTimeGrid => return self.scroll_time_grid(),
 
             Message::Tick => {
-                self.now = chrono::Local::now().naive_local();
+                // A timezone change (travel, automatic zone updates) moves
+                // every occurrence's wall clock; follow it rather than fire
+                // reminders offset by the difference until a restart.
+                let rezoned = match self.store.as_mut().map(crate::clock::follow_timezone) {
+                    Some(Ok(rezoned)) => rezoned,
+                    Some(Err(why)) => {
+                        tracing::warn!(%why, "could not follow the timezone change");
+                        false
+                    }
+                    None => false,
+                };
+                self.now = self.clock_now();
                 let today = self.now.date();
-                if today != self.today {
+                if rezoned || today != self.today {
                     // Past midnight: today moved, so the highlight and any
                     // relative view must follow it.
                     self.today = today;
@@ -2387,6 +2400,11 @@ impl AppModel {
     /// Separate from [`Self::reload`] because tasks are not indexed and are
     /// only needed by one view; loading them on every grid redraw would read
     /// every `.ics` in every collection for nothing.
+    /// Wall-clock now in the zone occurrences are expressed in.
+    fn clock_now(&self) -> NaiveDateTime {
+        crate::clock::now_in(self.local_timezone())
+    }
+
     /// The store's timezone, or UTC before the store has opened.
     fn local_timezone(&self) -> chrono_tz::Tz {
         self.store.as_ref().map_or(
@@ -4018,8 +4036,7 @@ impl AppModel {
     fn default_new_event_time(&self) -> NaiveDateTime {
         // On today's date, start from the next whole hour; otherwise 09:00.
         if self.anchor == self.today {
-            let now = chrono::Local::now().naive_local();
-            let hour = (now.hour() + 1).min(23);
+            let hour = (self.clock_now().hour() + 1).min(23);
             self.anchor
                 .and_hms_opt(hour, 0, 0)
                 .unwrap_or_else(|| self.anchor.and_time(NaiveTime::MIN))
@@ -4473,7 +4490,7 @@ impl AppModel {
 
         if let Some(date) = task.date {
             self.anchor = date;
-            self.today = chrono::Local::now().date_naive();
+            self.today = self.clock_now().date();
             self.sync_mini();
             self.reload();
             tasks.push(Self::request_scroll());

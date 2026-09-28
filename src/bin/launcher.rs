@@ -152,7 +152,10 @@ impl Plugin {
             tracing::warn!(%why, "refresh failed");
         }
 
-        let today = chrono::Local::now().date_naive();
+        if let Err(why) = slate::clock::follow_timezone(store) {
+            tracing::warn!(%why, "could not follow the timezone change");
+        }
+        let today = slate::clock::now_in(store.local_timezone()).date();
         let occurrences = store
             .occurrences(
                 today - Duration::days(PAST_DAYS),

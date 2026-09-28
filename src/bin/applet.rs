@@ -91,8 +91,6 @@ impl cosmic::Application for Applet {
     }
 
     fn init(core: Core, _flags: Self::Flags) -> (Self, Task<Message>) {
-        let now = chrono::Local::now().naive_local();
-
         let store = match Store::open_default() {
             Ok(store) => Some(store),
             Err(why) => {
@@ -100,6 +98,8 @@ impl cosmic::Application for Applet {
                 None
             }
         };
+        let now =
+            slate::clock::now_in(store.as_ref().map_or(chrono_tz::UTC, Store::local_timezone));
 
         let mut applet = Applet {
             core,
@@ -152,7 +152,16 @@ impl cosmic::Application for Applet {
             }
 
             Message::Tick => {
-                self.now = chrono::Local::now().naive_local();
+                if let Some(store) = self.store.as_mut()
+                    && let Err(why) = slate::clock::follow_timezone(store)
+                {
+                    tracing::warn!(%why, "could not follow the timezone change");
+                }
+                self.now = slate::clock::now_in(
+                    self.store
+                        .as_ref()
+                        .map_or(chrono_tz::UTC, Store::local_timezone),
+                );
                 if self.now.date() != self.today {
                     self.today = self.now.date();
                 }

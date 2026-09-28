@@ -22,6 +22,8 @@ pub mod meeting;
 pub mod quickadd;
 pub mod reminders;
 pub mod scheduling;
+#[cfg(test)]
+mod testbus;
 pub mod ui;
 pub mod undo;
 

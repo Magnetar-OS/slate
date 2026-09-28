@@ -23,6 +23,8 @@ All notable user-facing changes to Slate. The format follows
 - The launcher plugin answers only queries that start with `cal `. It had no
   routing pattern, so it searched the calendar on every keystroke typed into
   the launcher and mixed events into unrelated results.
+- Reminders keep firing while the window is open after the background daemon
+  stops, and are not shown twice when the daemon starts after the window.
 
 ## [1.1.0] - 2026-09-22
 

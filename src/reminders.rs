@@ -171,23 +171,28 @@ impl Scheduler {
 }
 
 /// Well-known bus name claimed by whichever process is responsible for firing
-/// reminders.
+/// reminders — and, while it is held, for syncing.
 ///
 /// The app and the background daemon can both be running, and both can see the
 /// same events. Without an arbiter the user would get every reminder twice. The
-/// daemon claims this name at startup; the app checks for it and stays quiet if
-/// someone already holds it.
+/// daemon claims this name at startup; the app watches it ([`watch_owner`])
+/// and stays quiet for exactly as long as someone holds it.
 pub const OWNER_BUS_NAME: &str = "com.magnetaros.Slate.Reminders";
 
-/// Claims responsibility for firing reminders.
+/// Claims responsibility for firing reminders on `connection`.
 ///
 /// Returns the connection on success — it must be kept alive, since dropping it
 /// releases the name. `Ok(None)` means someone else already owns it.
-pub async fn claim_ownership() -> Result<Option<zbus::Connection>, zbus::Error> {
+///
+/// # Errors
+///
+/// When the bus refuses the request for any other reason.
+pub async fn claim_ownership(
+    connection: zbus::Connection,
+) -> Result<Option<zbus::Connection>, zbus::Error> {
     use zbus::fdo::RequestNameFlags;
     use zbus::fdo::RequestNameReply;
 
-    let connection = zbus::Connection::session().await?;
     let reply = connection
         .request_name_with_flags(
             OWNER_BUS_NAME,
@@ -211,22 +216,47 @@ pub async fn claim_ownership() -> Result<Option<zbus::Connection>, zbus::Error> 
     }
 }
 
-/// Whether some other process is already firing reminders.
+/// Reports whether someone owns [`OWNER_BUS_NAME`] — once now, then again
+/// every time that changes — until the bus goes away.
 ///
-/// Any failure to reach the bus answers "no": a calendar with no reminders is a
-/// worse outcome than one that occasionally shows a duplicate.
-pub async fn someone_else_owns_reminders() -> bool {
-    let Ok(connection) = zbus::Connection::session().await else {
-        return false;
-    };
-    let Ok(proxy) = zbus::fdo::DBusProxy::new(&connection).await else {
-        return false;
-    };
-    let Ok(name) = zbus::names::BusName::try_from(OWNER_BUS_NAME) else {
-        return false;
-    };
+/// Ownership is a runtime fact, not a startup one: the daemon can be enabled
+/// after the app opened (both would fire), or crash and restart while it is
+/// open (neither would). Following `NameOwnerChanged` is what keeps exactly
+/// one of them firing through all of that.
+///
+/// The signal subscription is made *before* the initial query, so a change
+/// between the two is reported rather than lost.
+///
+/// # Errors
+///
+/// When the bus cannot be queried or subscribed to; the caller then has to
+/// decide ownership without it.
+pub async fn watch_owner(
+    connection: &zbus::Connection,
+    mut on_change: impl FnMut(bool),
+) -> Result<(), zbus::Error> {
+    use cosmic::iced::futures::StreamExt;
 
-    proxy.name_has_owner(name).await.unwrap_or(false)
+    let proxy = zbus::fdo::DBusProxy::new(connection).await?;
+    let mut changes = proxy
+        .receive_name_owner_changed_with_args(&[(0, OWNER_BUS_NAME)])
+        .await?;
+
+    let name = zbus::names::BusName::try_from(OWNER_BUS_NAME)?;
+    let mut owned = proxy.name_has_owner(name).await?;
+    on_change(owned);
+
+    while let Some(signal) = changes.next().await {
+        let Ok(args) = signal.args() else {
+            continue;
+        };
+        let now_owned = args.new_owner().is_some();
+        if now_owned != owned {
+            owned = now_owned;
+            on_change(owned);
+        }
+    }
+    Ok(())
 }
 
 /// Counts the reminders whose moment passed while the machine was asleep, and
@@ -716,5 +746,53 @@ mod tests {
 
         scheduler.forget_before(at(9, 0) + Duration::days(1));
         assert_eq!(scheduler.tracked(), 0);
+    }
+
+    #[tokio::test]
+    async fn the_app_follows_the_daemon_coming_and_going() {
+        async fn next(rx: &mut tokio::sync::mpsc::UnboundedReceiver<bool>) -> bool {
+            tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("an ownership change within five seconds")
+                .expect("the watch is still running")
+        }
+
+        let bus = crate::testbus::PrivateBus::start();
+        let app = bus.connect().await;
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let watch = tokio::spawn(async move {
+            let _ = watch_owner(&app, |owned| {
+                let _ = tx.send(owned);
+            })
+            .await;
+        });
+
+        assert!(!next(&mut rx).await, "nobody owns reminders yet");
+
+        let daemon = claim_ownership(bus.connect().await)
+            .await
+            .unwrap()
+            .expect("the name was free");
+        assert!(
+            next(&mut rx).await,
+            "the daemon started; the app must stand down"
+        );
+
+        // A second daemon bows out rather than queueing for the name.
+        assert!(
+            claim_ownership(bus.connect().await)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        drop(daemon);
+        assert!(
+            !next(&mut rx).await,
+            "the daemon exited; the app must take over"
+        );
+
+        watch.abort();
     }
 }

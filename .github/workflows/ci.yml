@@ -39,13 +39,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # libcosmic pulls in the Wayland, XKB, and OpenSSL stacks.
+      # libcosmic pulls in the Wayland, XKB, and OpenSSL stacks; the D-Bus
+      # tests start a private dbus-daemon of their own.
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwayland-dev libxkbcommon-dev libssl-dev libsqlite3-dev \
-            libudev-dev libinput-dev pkg-config
+            libudev-dev libinput-dev pkg-config dbus-daemon
 
       # No toolchain action on purpose: rustup on the runner reads
       # rust-toolchain.toml, so the pin and its components apply here with no

@@ -146,3 +146,5 @@ strip = true
 
 [dev-dependencies]
 pop-launcher = "1.2.7"
+# Temporary directories for the private test bus and for on-disk state.
+tempfile = "3.27"

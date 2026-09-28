@@ -396,7 +396,8 @@ pub enum Message {
     DialogCancelled,
     DialogFailed(String),
 
-    /// Whether another process (the daemon) is firing reminders for us.
+    /// Whether another process (the daemon) is firing reminders for us —
+    /// reported at start-up and again whenever that changes.
     ReminderOwnership(bool),
 
     /// A background task finished and has nothing to report.
@@ -912,14 +913,7 @@ impl cosmic::Application for AppModel {
         app.secondary_tz_input = app.config.secondary_timezone.clone();
         app.reload();
         app.reload_conflicts();
-        let mut startup = vec![
-            app.update_title(),
-            Self::request_scroll(),
-            // Ask the bus whether the daemon is already handling reminders.
-            cosmic::task::future(async {
-                Message::ReminderOwnership(crate::reminders::someone_else_owns_reminders().await)
-            }),
-        ];
+        let mut startup = vec![app.update_title(), Self::request_scroll()];
 
         for path in flags.import {
             startup.push(cosmic::task::message(cosmic::Action::App(
@@ -1405,6 +1399,7 @@ impl cosmic::Application for AppModel {
                 }),
             file_watch_subscription(),
             wake_subscription(),
+            owner_subscription(),
             // Moves the "now" marker and rolls the highlight over at midnight.
             cosmic::iced::time::every(std::time::Duration::from_secs(30)).map(|_| Message::Tick),
             // Only `Ignored` presses: a focused text input has already claimed
@@ -2236,10 +2231,16 @@ impl cosmic::Application for AppModel {
             }
 
             Message::ReminderOwnership(delegated) => {
+                let taking_over = self.reminders_delegated && !delegated;
+                self.reminders_delegated = delegated;
                 if delegated {
                     tracing::info!("the reminder daemon is running; leaving reminders to it");
+                } else if taking_over {
+                    // The daemon went away (or was never there): from now on
+                    // reminders are ours, starting with any already due.
+                    tracing::info!("no reminder daemon; firing reminders here");
+                    return self.fire_due_reminders();
                 }
-                self.reminders_delegated = delegated;
             }
 
             Message::ImportRequested => {
@@ -4672,6 +4673,58 @@ fn file_watch_subscription() -> Subscription<Message> {
                         std::future::pending::<()>().await;
                     }
                 }
+            },
+        )
+    })
+}
+
+/// Follows who owns reminders for as long as the app runs.
+///
+/// The daemon can start after the app (enabled, or restarted by systemd) or
+/// stop while it is open; checking once at start-up left the app firing
+/// alongside a new daemon, or silent after the daemon exited. When the bus is
+/// unreachable the app fires reminders itself: a calendar with no reminders
+/// is worse than one that occasionally shows a duplicate.
+fn owner_subscription() -> Subscription<Message> {
+    Subscription::run(|| {
+        cosmic::iced::stream::channel(
+            4,
+            |mut output: futures::channel::mpsc::Sender<_>| async move {
+                let (tx, mut rx) = futures::channel::mpsc::unbounded();
+                let fallback = tx.clone();
+                let watch = async move {
+                    let followed = match zbus::Connection::session().await {
+                        Ok(connection) => {
+                            crate::reminders::watch_owner(&connection, move |owned| {
+                                let _ = tx.unbounded_send(owned);
+                            })
+                            .await
+                        }
+                        Err(why) => Err(why),
+                    };
+                    if let Err(why) = followed {
+                        tracing::warn!(%why, "cannot follow the reminder daemon; firing reminders here");
+                    }
+                    let _ = fallback.unbounded_send(false);
+                };
+
+                let pump = async move {
+                    use futures::StreamExt;
+                    while let Some(owned) = rx.next().await {
+                        if output
+                            .send(Message::ReminderOwnership(owned))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                };
+
+                futures::future::join(watch, pump).await;
+                // A stream that ended would make iced restart the subscription
+                // in a tight loop.
+                std::future::pending::<()>().await;
             },
         )
     })

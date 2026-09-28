@@ -16,8 +16,9 @@
 //! name: whoever holds it is the single writer, and the app defers to it.
 //!
 //! It claims [`OWNER_BUS_NAME`](slate::reminders::OWNER_BUS_NAME) on
-//! startup. The app watches for that name and suppresses its own reminders while
-//! it is held, so having both running does not double every notification.
+//! startup. The app follows that name for as long as it runs and suppresses its
+//! own reminders exactly while it is held, so having both running does not
+//! double every notification, and the daemon stopping does not silence them.
 
 use chrono::Duration;
 use cosmic_pim_accounts::AccountStore;
@@ -57,14 +58,21 @@ async fn main() -> std::process::ExitCode {
 
     // Held for the lifetime of the process: dropping it releases the name and
     // would silently hand reminders back to the app.
-    let _connection = match reminders::claim_ownership().await {
+    let session = match zbus::Connection::session().await {
+        Ok(connection) => connection,
+        Err(why) => {
+            tracing::error!(%why, "cannot reach the session bus");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let _connection = match reminders::claim_ownership(session).await {
         Ok(Some(connection)) => connection,
         Ok(None) => {
             tracing::info!("another process already owns reminders; exiting");
             return std::process::ExitCode::SUCCESS;
         }
         Err(why) => {
-            tracing::error!(%why, "cannot reach the session bus");
+            tracing::error!(%why, "cannot claim the reminder name");
             return std::process::ExitCode::FAILURE;
         }
     };

@@ -129,6 +129,8 @@ reminder-in = In { $minutes } { $minutes ->
        *[other] minutes
     }
 reminder-at = At { $time }
+# A reminder days ahead of its event: "Thu 6 August at 14:00".
+reminder-on = { $day } at { $time }
 reminders-missed = { $count } { $count ->
         [one] reminder
        *[other] reminders

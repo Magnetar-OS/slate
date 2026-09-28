@@ -28,6 +28,9 @@ All notable user-facing changes to Slate. The format follows
 - A reminder is no longer shown a second time when the daemon restarts (an
   upgrade, a new login) or hands over to the open window within minutes of
   its trigger.
+- Reminders set more than a day ahead of their event ("2 days before",
+  "1 week before") now fire; they were never shown. A reminder for a later
+  day says which day.
 
 ## [1.1.0] - 2026-09-22
 

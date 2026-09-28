@@ -53,7 +53,24 @@ impl Reminder {
     /// time — and two copies of this text drifted apart once already.
     #[must_use]
     pub fn body(&self, config: &Config) -> String {
-        let when = if self.all_day {
+        let fired_on = (self.start - self.lead).date();
+        let when = if self.start.date() != fired_on {
+            // A reminder days ahead: "At 14:00" would read as today.
+            let day = format!(
+                "{} {}",
+                crate::ui::weekday_short(chrono::Datelike::weekday(&self.start.date())),
+                crate::ui::format_date_short(self.start.date())
+            );
+            if self.all_day {
+                day
+            } else {
+                fl!(
+                    "reminder-on",
+                    day = day,
+                    time = crate::ui::format_time(self.start.time(), config)
+                )
+            }
+        } else if self.all_day {
             fl!("all-day")
         } else {
             let minutes = self.lead.num_minutes();
@@ -242,7 +259,13 @@ impl Scheduler {
 }
 
 /// How far ahead of today a sweep looks for events whose alarms are due.
-const LOOKAHEAD_DAYS: i64 = 2;
+///
+/// An alarm fires relative to its event, so an event two weeks out can have a
+/// reminder due today. Two weeks and a day covers every lead the common
+/// clients offer (Thunderbird's longest preset is a week, Outlook's two); a
+/// longer one fires late, once its event comes inside this window, rather
+/// than never.
+pub const LOOKAHEAD_DAYS: i64 = 15;
 
 /// Where the app and the daemon share what they have fired:
 /// `$XDG_STATE_HOME/slate/fired-reminders.json`.
@@ -334,10 +357,11 @@ pub fn missed_reminders(
     slept_at: NaiveDateTime,
     now: NaiveDateTime,
 ) -> Result<usize, crate::store::StoreError> {
-    // A day either side of the window covers any plausible suspend.
+    // A day before the window covers any plausible suspend; the lookahead
+    // covers the long-lead alarms `due_reminders` would have seen.
     let occurrences = store.occurrences(
         slept_at.date() - Duration::days(1),
-        now.date() + Duration::days(1),
+        now.date() + Duration::days(LOOKAHEAD_DAYS),
         &config.hidden_set(),
     )?;
 
@@ -1022,6 +1046,34 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "the reminder fired in both processes"
+        );
+    }
+
+    #[test]
+    fn an_alarm_days_ahead_of_its_event_fires() {
+        // The flight is on Friday; its alarm is two days before.
+        let config = Config::default();
+        let friday = at(9, 0) + Duration::days(3);
+        let (_dir, store) = store_with(|calendar, local| {
+            let mut flight = event_at(calendar, local, "Flight", friday);
+            flight.alarms = vec![Duration::days(-2)];
+            vec![flight]
+        });
+
+        let due = due_reminders(
+            &store,
+            &mut Scheduler::new(),
+            &config,
+            friday - Duration::days(2),
+        )
+        .unwrap();
+        assert_eq!(due.len(), 1, "an alarm beyond two days out never fired");
+        assert!(
+            due[0]
+                .body(&config)
+                .contains(&crate::ui::format_date_short(friday.date())),
+            "a reminder days ahead must say which day: {}",
+            due[0].body(&config)
         );
     }
 

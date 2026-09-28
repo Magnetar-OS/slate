@@ -57,6 +57,13 @@ struct Applet {
     upcoming: Vec<Occurrence>,
     /// Tasks due soon or already overdue.
     due_tasks: Vec<Todo>,
+    /// Every unfinished task in a visible calendar, as last read from disk.
+    ///
+    /// Tasks are not indexed — reading them opens every `.ics` in every
+    /// collection — so they are read when files or settings change, not on
+    /// the minute tick. The tick only re-filters this list, since "overdue"
+    /// and "due this week" move with the clock.
+    open_tasks: Vec<Todo>,
     /// Handle on the Wayland thread that mints XDG activation tokens. `None`
     /// until the subscription has started, and on non-Wayland sessions.
     token_tx: Option<calloop::channel::Sender<TokenRequest>>,
@@ -110,8 +117,10 @@ impl cosmic::Application for Applet {
             now,
             upcoming: Vec::new(),
             due_tasks: Vec::new(),
+            open_tasks: Vec::new(),
             token_tx: None,
         };
+        applet.read_tasks();
         applet.reload();
 
         (applet, Task::none())
@@ -152,10 +161,13 @@ impl cosmic::Application for Applet {
             }
 
             Message::Tick => {
-                if let Some(store) = self.store.as_mut()
-                    && let Err(why) = slate::clock::follow_timezone(store)
-                {
-                    tracing::warn!(%why, "could not follow the timezone change");
+                if let Some(store) = self.store.as_mut() {
+                    match slate::clock::follow_timezone(store) {
+                        // Due dates resolve in the zone; read them again.
+                        Ok(true) => self.read_tasks(),
+                        Ok(false) => {}
+                        Err(why) => tracing::warn!(%why, "could not follow the timezone change"),
+                    }
                 }
                 self.now = slate::clock::now_in(
                     self.store
@@ -170,6 +182,7 @@ impl cosmic::Application for Applet {
 
             Message::UpdateConfig(config) => {
                 self.config = config;
+                self.read_tasks();
                 self.reload();
             }
 
@@ -179,6 +192,7 @@ impl cosmic::Application for Applet {
                 {
                     tracing::warn!(%why, "applet refresh failed");
                 }
+                self.read_tasks();
                 self.reload();
             }
 
@@ -290,6 +304,17 @@ impl Applet {
     }
 
     /// Reloads the next week of events.
+    /// Reads the unfinished tasks from disk. See [`Applet::open_tasks`].
+    fn read_tasks(&mut self) {
+        self.open_tasks = self.store.as_ref().map_or_else(Vec::new, |store| {
+            store
+                .todos(&self.config.hidden_set())
+                .into_iter()
+                .filter(|todo| !todo.is_done())
+                .collect()
+        });
+    }
+
     fn reload(&mut self) {
         let Some(store) = self.store.as_ref() else {
             self.upcoming.clear();
@@ -303,15 +328,15 @@ impl Applet {
         // is the opposite of what a panel glance is for.
         let local = store.local_timezone();
         let horizon = self.today + Duration::days(HORIZON_DAYS);
-        self.due_tasks = store
-            .todos(&self.config.hidden_set())
-            .into_iter()
-            .filter(|todo| !todo.is_done())
+        self.due_tasks = self
+            .open_tasks
+            .iter()
             .filter(|todo| {
                 todo.is_overdue(self.now, local)
                     || todo.due_date(local).is_some_and(|due| due < horizon)
             })
             .take(MAX_LISTED)
+            .cloned()
             .collect();
 
         let from = self.today;

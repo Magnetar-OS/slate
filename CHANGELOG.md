@@ -52,6 +52,10 @@ All notable user-facing changes to Slate. The format follows
   duplicate.
 - When a saved change cannot be queued for upload to its server, Slate says
   so instead of reporting success.
+- An invitation that could not be answered (no writable calendar, no address
+  for the account) stays in the queue to retry, and the same invitation
+  delivered twice is asked about once; a newer revision replaces the older
+  one.
 
 ## [1.1.0] - 2026-09-22
 

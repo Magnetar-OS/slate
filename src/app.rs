@@ -610,6 +610,26 @@ pub struct PendingInvitation {
     pub event: Option<crate::model::Event>,
 }
 
+/// Adds a delivered invitation to the queue, once.
+///
+/// Envelope delivers a REQUEST every time it sees the mail — a re-sync, a
+/// second account holding the same message, the organizer re-sending. One
+/// question per revision: a copy of what is already queued is dropped, and a
+/// newer revision (higher SEQUENCE) of a queued invitation replaces it in
+/// place, since answering the older one would be answering something the
+/// organizer has already changed.
+fn enqueue_invitation(queue: &mut Vec<PendingInvitation>, invitation: PendingInvitation) {
+    let same = |queued: &PendingInvitation| {
+        queued.parsed.uid == invitation.parsed.uid
+            && queued.parsed.recurrence_id == invitation.parsed.recurrence_id
+    };
+    match queue.iter_mut().find(|queued| same(queued)) {
+        Some(queued) if invitation.parsed.sequence > queued.parsed.sequence => *queued = invitation,
+        Some(_) => {}
+        None => queue.push(invitation),
+    }
+}
+
 /// Identity and geometry of a time-grid block under the pointer.
 #[derive(Clone, Debug)]
 pub struct GridBlockRef {
@@ -1761,12 +1781,15 @@ impl cosmic::Application for AppModel {
                         let event = crate::store::vdir::parse_ics(&delivery.ics, "", "")
                             .into_iter()
                             .next();
-                        self.invitations.push(PendingInvitation {
-                            account_id: delivery.account_id,
-                            ics: delivery.ics,
-                            parsed,
-                            event,
-                        });
+                        enqueue_invitation(
+                            &mut self.invitations,
+                            PendingInvitation {
+                                account_id: delivery.account_id,
+                                ics: delivery.ics,
+                                parsed,
+                                event,
+                            },
+                        );
                     }
                     // A CANCEL or REPLY carries no decision for this user;
                     // the gates inside `itip::apply` decide what it may do.
@@ -3431,10 +3454,12 @@ impl AppModel {
     fn answer_invitation(&mut self, answer: InviteAnswer) -> Task<cosmic::Action<Message>> {
         use cosmic_pim_caldav::itip;
 
-        if self.invitations.is_empty() {
+        // Stays at the front of the queue until it has been answered: a
+        // failure the user can fix (no writable calendar, no address, a disk
+        // error) leaves the dialog up to try again or put off.
+        let Some(invitation) = self.invitations.first().cloned() else {
             return Task::none();
-        }
-        let invitation = self.invitations.remove(0);
+        };
 
         let Some(meta) = self.invitation_collection(&invitation.account_id) else {
             return self.toast_error(&fl!("no-writable-calendar"));
@@ -3446,8 +3471,13 @@ impl AppModel {
 
         if answer != InviteAnswer::Declined {
             match itip::apply(&meta.path, &invitation.ics, &me) {
-                Ok(itip::Outcome::Stale) => return self.toast_error(&fl!("invitation-stale")),
+                // Neither can succeed on a retry; the invitation is done with.
+                Ok(itip::Outcome::Stale) => {
+                    self.invitations.remove(0);
+                    return self.toast_error(&fl!("invitation-stale"));
+                }
                 Ok(itip::Outcome::NotForMe) => {
+                    self.invitations.remove(0);
                     return self.toast_error(&fl!("invitation-not-for-me"));
                 }
                 Ok(outcome) => {
@@ -3458,6 +3488,8 @@ impl AppModel {
                 Err(why) => return self.toast_error(&why.to_string()),
             }
         }
+        // Answered: what remains is telling the organizer.
+        self.invitations.remove(0);
 
         let Some(organizer) = invitation
             .parsed
@@ -5271,6 +5303,40 @@ mod tests {
             removal_after(&calendar.path.join(&series.file_name)),
             Removal::Delete
         );
+    }
+
+    fn invitation(uid: &str, sequence: i64, summary: &str) -> PendingInvitation {
+        let ics = format!(
+            "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:{uid}\r\n\
+             SEQUENCE:{sequence}\r\nSUMMARY:{summary}\r\nDTSTART:20260804T090000Z\r\n\
+             ORGANIZER:mailto:boss@example.com\r\nATTENDEE:mailto:me@example.com\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n"
+        );
+        PendingInvitation {
+            account_id: "work".into(),
+            parsed: cosmic_pim_caldav::itip::parse(&ics).unwrap(),
+            event: None,
+            ics,
+        }
+    }
+
+    #[test]
+    fn the_same_invitation_is_asked_about_once() {
+        let mut queue = Vec::new();
+        enqueue_invitation(&mut queue, invitation("review@x", 0, "Review"));
+        enqueue_invitation(&mut queue, invitation("review@x", 0, "Review"));
+        enqueue_invitation(&mut queue, invitation("lunch@x", 0, "Lunch"));
+        assert_eq!(queue.len(), 2);
+    }
+
+    #[test]
+    fn a_newer_revision_replaces_the_queued_one() {
+        let mut queue = Vec::new();
+        enqueue_invitation(&mut queue, invitation("review@x", 1, "Review"));
+        enqueue_invitation(&mut queue, invitation("review@x", 2, "Review, moved"));
+        enqueue_invitation(&mut queue, invitation("review@x", 1, "Review"));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].parsed.sequence, 2);
     }
 
     #[test]

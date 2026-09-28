@@ -595,16 +595,61 @@ pub async fn notify_missed(count: usize, app_id: &str) {
     }
 }
 
-/// Fires `on_resume` every time the system comes back from sleep.
+/// Where the last sleep began, for the missed-reminder digest.
+///
+/// The digest covers the triggers between the machine going down and coming
+/// back. The going-down instant is taken from login1's own
+/// `PrepareForSleep(true)`, not from "when the last sweep ran": a sweep that
+/// runs after resume but before the resume signal is handled would otherwise
+/// move the window's start past the sleep and empty it, silently absorbing
+/// every miss.
+///
+/// Where login1 never says it is going down (the signal was missed, or the
+/// process started asleep), the last sweep is the best available bound.
+#[derive(Clone, Copy, Debug)]
+pub struct SleepWindow {
+    last_sweep: NaiveDateTime,
+    asleep_since: Option<NaiveDateTime>,
+}
+
+impl SleepWindow {
+    #[must_use]
+    pub fn new(now: NaiveDateTime) -> Self {
+        Self {
+            last_sweep: now,
+            asleep_since: None,
+        }
+    }
+
+    /// A reminder sweep ran at `now`.
+    pub fn swept(&mut self, now: NaiveDateTime) {
+        self.last_sweep = now;
+    }
+
+    /// login1 announced the machine is going to sleep.
+    pub fn going_down(&mut self, now: NaiveDateTime) {
+        self.asleep_since = Some(now);
+    }
+
+    /// The machine is back; returns where the window it slept through began.
+    pub fn woke(&mut self) -> NaiveDateTime {
+        self.asleep_since.take().unwrap_or(self.last_sweep)
+    }
+}
+
+/// Calls `on_change` each time login1 announces a sleep (`true`) or a resume
+/// (`false`).
 ///
 /// `org.freedesktop.login1`'s `PrepareForSleep` carries `true` on the way down
-/// and `false` on the way back up; only the second is interesting here. The
-/// signal is on the *system* bus, unlike everything else this module talks to.
+/// and `false` on the way back up; both matter — see [`SleepWindow`]. The
+/// signal is on the *system* bus, unlike everything else this module talks
+/// to.
 ///
 /// Never returns while the connection holds; a failure to reach login1 (a
 /// container, a non-systemd host) is logged once and then simply means no
 /// digests, which is the pre-existing behaviour rather than an error.
-pub async fn on_wake(mut on_resume: impl FnMut()) {
+pub async fn on_sleep(mut on_change: impl FnMut(bool)) {
+    use cosmic::iced::futures::StreamExt;
     use zbus::MatchRule;
 
     let connection = match zbus::Connection::system().await {
@@ -635,11 +680,9 @@ pub async fn on_wake(mut on_resume: impl FnMut()) {
         }
     };
 
-    use cosmic::iced::futures::StreamExt;
     while let Some(Ok(message)) = stream.next().await {
-        // `false` is the resume half of the signal.
-        if message.body().deserialize::<bool>() == Ok(false) {
-            on_resume();
+        if let Ok(going_down) = message.body().deserialize::<bool>() {
+            on_change(going_down);
         }
     }
 }
@@ -1173,6 +1216,23 @@ mod tests {
             due[0].join.as_deref(),
             Some("https://video.example.org/r/42")
         );
+    }
+
+    #[test]
+    fn a_sweep_after_resume_does_not_empty_the_digest_window() {
+        let mut window = SleepWindow::new(at(8, 0));
+        window.swept(at(8, 30));
+        window.going_down(at(9, 0));
+        // Resumed at 12:00, and a tick ran before the resume signal arrived.
+        window.swept(at(12, 0));
+        assert_eq!(window.woke(), at(9, 0));
+    }
+
+    #[test]
+    fn without_a_going_down_signal_the_last_sweep_bounds_the_window() {
+        let mut window = SleepWindow::new(at(8, 0));
+        window.swept(at(8, 30));
+        assert_eq!(window.woke(), at(8, 30));
     }
 
     #[tokio::test]

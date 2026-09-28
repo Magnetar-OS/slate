@@ -34,6 +34,8 @@ All notable user-facing changes to Slate. The format follows
 - The Join button on a reminder notification finds the meeting link in the
   event's description or its conference property, where invitations usually
   put it, not only in the location.
+- The summary of reminders missed during a suspend no longer comes up empty
+  when a clock tick lands before the resume signal.
 
 ## [1.1.0] - 2026-09-22
 

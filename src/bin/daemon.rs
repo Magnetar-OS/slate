@@ -22,7 +22,7 @@
 
 use cosmic_pim_accounts::AccountStore;
 use slate::config::Config;
-use slate::reminders::{self, Scheduler};
+use slate::reminders::{self, Scheduler, SleepWindow};
 use slate::store::{Store, watcher};
 
 const APP_ID: &str = "com.magnetaros.Slate";
@@ -103,17 +103,17 @@ async fn main() -> std::process::ExitCode {
     let mut sync_ticker = tokio::time::interval(SYNC_TICK);
 
     // The daemon is what is running while the machine sleeps, so the
-    // missed-reminder digest is its job. `on_wake` never returns while login1
+    // missed-reminder digest is its job. `on_sleep` never returns while login1
     // is reachable and simply ends where it is not.
-    let (wake_tx, mut wake_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let (sleep_tx, mut sleep_rx) = tokio::sync::mpsc::channel::<bool>(4);
     tokio::spawn(async move {
-        reminders::on_wake(move || {
-            let _ = wake_tx.try_send(());
+        reminders::on_sleep(move |going_down| {
+            let _ = sleep_tx.try_send(going_down);
         })
         .await;
     });
-    // When the last sweep ran, which is the start of any sleep window.
-    let mut last_sweep = chrono::Local::now().naive_local();
+    // Where the sleep window being reported on began.
+    let mut sleep = SleepWindow::new(chrono::Local::now().naive_local());
     // `Delay` rather than `Burst`: after a suspend-resume the missed ticks must
     // not all fire at once and start several overlapping sync passes.
     sync_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -125,16 +125,20 @@ async fn main() -> std::process::ExitCode {
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                last_sweep = check(&mut store, &mut scheduler);
+                sleep.swept(check(&mut store, &mut scheduler));
             }
-            Some(()) = wake_rx.recv() => {
+            Some(going_down) = sleep_rx.recv() => {
+                if going_down {
+                    sleep.going_down(chrono::Local::now().naive_local());
+                    continue;
+                }
                 // Back from suspend: say how many alarms passed, once, then
                 // resume the normal sweep.
                 if let Err(why) = store.refresh() {
                     tracing::warn!(%why, "refresh after resume failed");
                 }
-                report_missed(&mut store, &mut scheduler, last_sweep).await;
-                last_sweep = check(&mut store, &mut scheduler);
+                report_missed(&mut store, &mut scheduler, sleep.woke()).await;
+                sleep.swept(check(&mut store, &mut scheduler));
             }
             _ = sync_ticker.tick() => {
                 let synced = sync_once().await;
@@ -147,7 +151,7 @@ async fn main() -> std::process::ExitCode {
                 if let Err(why) = store.refresh() {
                     tracing::warn!(%why, "refresh after a file change failed");
                 }
-                last_sweep = check(&mut store, &mut scheduler);
+                sleep.swept(check(&mut store, &mut scheduler));
             }
             () = &mut shutdown => {
                 tracing::info!("shutting down");

@@ -157,9 +157,9 @@ pub struct AppModel {
 
     /// The quick-add dialog's input; `Some` shows the dialog.
     quick_add: Option<String>,
-    /// When the reminder sweep last ran, so a resume knows which window it
-    /// slept through.
-    last_reminder_sweep: NaiveDateTime,
+    /// Where the current (or last) sleep began, so a resume knows which
+    /// window it slept through.
+    sleep: crate::reminders::SleepWindow,
 
     /// A pending "this event / all events" question. The editor stays open
     /// underneath until the user answers or cancels.
@@ -334,8 +334,8 @@ pub enum Message {
     /// The reply handed to Envelope came back: `true` = queued in its outbox.
     InvitationReplySent(bool),
 
-    /// The machine came back from sleep.
-    Resumed,
+    /// login1 announced a sleep (`true`) or the resume from one (`false`).
+    Sleep(bool),
 
     // History
     Undo,
@@ -883,7 +883,7 @@ impl cosmic::Application for AppModel {
             search_results: Vec::new(),
             history: crate::undo::History::default(),
             quick_add: None,
-            last_reminder_sweep: chrono::Local::now().naive_local(),
+            sleep: crate::reminders::SleepWindow::new(chrono::Local::now().naive_local()),
             scope_prompt: None,
             toasts: widget::Toasts::new(Message::CloseToast),
             // Shared with the daemon, so a hand-over in either direction does
@@ -1400,7 +1400,7 @@ impl cosmic::Application for AppModel {
                     Message::UpdateConfig(update.config)
                 }),
             file_watch_subscription(),
-            wake_subscription(),
+            sleep_subscription(),
             owner_subscription(),
             // Moves the "now" marker and rolls the highlight over at midnight.
             cosmic::iced::time::every(std::time::Duration::from_secs(30)).map(|_| Message::Tick),
@@ -2116,9 +2116,13 @@ impl cosmic::Application for AppModel {
                 }
             }
 
-            Message::Resumed => {
-                let slept_at = self.last_reminder_sweep;
+            Message::Sleep(going_down) => {
                 self.now = chrono::Local::now().naive_local();
+                if going_down {
+                    self.sleep.going_down(self.now);
+                    return Task::none();
+                }
+                let slept_at = self.sleep.woke();
                 self.today = self.now.date();
                 // The vdir may have moved on underneath a suspended machine.
                 if let Some(store) = self.store.as_mut() {
@@ -2720,7 +2724,7 @@ impl AppModel {
             return Task::none();
         };
 
-        self.last_reminder_sweep = self.now;
+        self.sleep.swept(self.now);
         let due = match crate::reminders::due_reminders(
             store,
             &mut self.reminders,
@@ -4683,24 +4687,24 @@ fn owner_subscription() -> Subscription<Message> {
     })
 }
 
-/// Fires once each time the machine resumes from sleep.
+/// Reports each time the machine goes to sleep and comes back.
 ///
 /// Modelled on [`file_watch_subscription`], including the park-on-failure: a
 /// stream that ended would make iced restart the subscription in a tight loop.
-fn wake_subscription() -> Subscription<Message> {
+fn sleep_subscription() -> Subscription<Message> {
     Subscription::run(|| {
         cosmic::iced::stream::channel(
             1,
             |mut output: futures::channel::mpsc::Sender<_>| async move {
                 let (tx, mut rx) = futures::channel::mpsc::unbounded();
-                let watch = crate::reminders::on_wake(move || {
-                    let _ = tx.unbounded_send(());
+                let watch = crate::reminders::on_sleep(move |going_down| {
+                    let _ = tx.unbounded_send(going_down);
                 });
 
                 let pump = async move {
                     use futures::StreamExt;
-                    while rx.next().await.is_some() {
-                        if output.send(Message::Resumed).await.is_err() {
+                    while let Some(going_down) = rx.next().await {
+                        if output.send(Message::Sleep(going_down)).await.is_err() {
                             break;
                         }
                     }

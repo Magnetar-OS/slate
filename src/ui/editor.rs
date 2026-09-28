@@ -814,7 +814,13 @@ impl Editor {
             .push(widget::button::standard(fl!("cancel")).on_press(Message::EditorCancel));
 
         if let Some(url) =
-            crate::meeting::meeting_link(Some(&self.location), Some(&self.description))
+            crate::meeting::meeting_link(Some(&self.location), Some(&self.description)).or_else(
+                || {
+                    self.original
+                        .as_ref()
+                        .and_then(|event| crate::meeting::conference_link(&event.other))
+                },
+            )
         {
             row =
                 row.push(widget::button::text(fl!("join-call")).on_press(Message::LaunchUrl(url)));

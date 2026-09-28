@@ -43,6 +43,10 @@ pub struct Reminder {
     pub all_day: bool,
     /// How long until the event starts, at the moment the reminder fires.
     pub lead: Duration,
+    /// Which instance of a series this is, for looking the event back up.
+    pub recurrence_id: Option<chrono::DateTime<chrono::Utc>>,
+    /// The video-call link the notification's Join button opens, if any.
+    pub join: Option<String>,
 }
 
 impl Reminder {
@@ -230,6 +234,8 @@ impl Scheduler {
                     start: occurrence.start,
                     all_day: occurrence.all_day,
                     lead: occurrence.start - now,
+                    recurrence_id: occurrence.recurrence_id,
+                    join: None,
                 });
             }
         }
@@ -282,7 +288,7 @@ pub fn fired_path() -> PathBuf {
     state.join("slate").join("fired-reminders.json")
 }
 
-/// The component behind one occurrence, for its alarms.
+/// The component behind one occurrence, for its alarms and its links.
 ///
 /// Instance-aware: an overridden occurrence carries its own VALARMs (a moved
 /// meeting reminds relative to its new time), and only falls back to the
@@ -299,7 +305,7 @@ fn instance(store: &Store, occurrence: &Occurrence) -> Option<crate::model::Even
 }
 
 /// The sweep both the app and the daemon run: every reminder due at `now`,
-/// each at most once.
+/// each at most once, with its Join link resolved.
 ///
 /// Reloads the shared memory first and persists it after, so whichever
 /// process owns reminders sees what the other already showed.
@@ -322,7 +328,7 @@ pub fn due_reminders(
 
     scheduler.reload();
     let known = scheduler.tracked();
-    let due = scheduler.due(
+    let mut due = scheduler.due(
         &occurrences,
         |occurrence| {
             instance(store, occurrence)
@@ -332,6 +338,27 @@ pub fn due_reminders(
         now,
         |occurrence| config.reminder_for(&occurrence.calendar_id),
     );
+
+    for reminder in &mut due {
+        // Invitations mostly carry the link in DESCRIPTION; the occurrence
+        // alone only knows the location.
+        reminder.join = store
+            .event_instance(
+                &reminder.id.calendar_id,
+                &reminder.id.uid,
+                reminder.recurrence_id,
+            )
+            .ok()
+            .flatten()
+            .and_then(|event| {
+                crate::meeting::meeting_link(
+                    event.location.as_deref(),
+                    event.description.as_deref(),
+                )
+                .or_else(|| crate::meeting::conference_link(&event.other))
+            })
+            .or_else(|| crate::meeting::meeting_link(reminder.location.as_deref(), None));
+    }
 
     // Keep the fired set from growing for the lifetime of the process.
     scheduler.forget_before(now - Duration::days(1));
@@ -615,9 +642,9 @@ pub async fn on_wake(mut on_resume: impl FnMut()) {
 /// Failure is logged, not surfaced: a missing notification daemon should not
 /// interrupt whatever the user is doing in the calendar.
 pub async fn notify(reminder: &Reminder, app_id: &str, body: String) {
-    // A video-call link in the location earns the notification a Join button
-    // — the reminder for a call should be one press from being in it.
-    let join = crate::meeting::meeting_link(reminder.location.as_deref(), None);
+    // A video-call link earns the notification a Join button — the reminder
+    // for a call should be one press from being in it.
+    let join = reminder.join.clone();
 
     let mut notification = notify_rust::Notification::new();
     notification
@@ -1074,6 +1101,42 @@ mod tests {
                 .contains(&crate::ui::format_date_short(friday.date())),
             "a reminder days ahead must say which day: {}",
             due[0].body(&config)
+        );
+    }
+
+    #[test]
+    fn the_join_button_finds_a_link_in_the_description() {
+        let config = Config::default();
+        let (_dir, store) = store_with(|calendar, local| {
+            let mut review = event_at(calendar, local, "Review", at(9, 0));
+            review.alarms = vec![Duration::minutes(-10)];
+            review.description = Some("Join: https://meet.google.com/abc-defg-hij".into());
+            vec![review]
+        });
+
+        let due = due_reminders(&store, &mut Scheduler::new(), &config, at(8, 50)).unwrap();
+        assert_eq!(
+            due[0].join.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
+    }
+
+    #[test]
+    fn the_join_button_takes_a_conference_uri() {
+        let config = Config::default();
+        let (_dir, store) = store_with(|calendar, local| {
+            let mut review = event_at(calendar, local, "Review", at(9, 0));
+            review.alarms = vec![Duration::minutes(-10)];
+            review.other = vec![
+                "CONFERENCE;VALUE=URI;FEATURE=VIDEO:https://video.example.org/r/42".to_owned(),
+            ];
+            vec![review]
+        });
+
+        let due = due_reminders(&store, &mut Scheduler::new(), &config, at(8, 50)).unwrap();
+        assert_eq!(
+            due[0].join.as_deref(),
+            Some("https://video.example.org/r/42")
         );
     }
 

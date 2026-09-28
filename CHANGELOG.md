@@ -31,6 +31,9 @@ All notable user-facing changes to Slate. The format follows
 - Reminders set more than a day ahead of their event ("2 days before",
   "1 week before") now fire; they were never shown. A reminder for a later
   day says which day.
+- The Join button on a reminder notification finds the meeting link in the
+  event's description or its conference property, where invitations usually
+  put it, not only in the location.
 
 ## [1.1.0] - 2026-09-22
 

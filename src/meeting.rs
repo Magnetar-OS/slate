@@ -7,6 +7,10 @@
 //! Zoom, Teams, Jitsi, `BigBlueButton`). Deliberately conservative: a link is
 //! offered only when its host matches a known service, because a "Join"
 //! button that opens someone's agenda document teaches people to ignore it.
+//!
+//! RFC 7986's `CONFERENCE` property is the exception: it exists to name the
+//! way into the meeting, so its URI is trusted whatever the host
+//! ([`conference_link`]).
 
 /// Hosts (or host substrings) that identify a video-call link.
 const SERVICES: &[&str] = &[
@@ -26,6 +30,32 @@ pub fn meeting_link(location: Option<&str>, description: Option<&str>) -> Option
     location
         .and_then(find_in)
         .or_else(|| description.and_then(find_in))
+}
+
+/// The first `https` URI among an event's `CONFERENCE` properties, given the
+/// event's unmodelled property lines (`Event::other`).
+///
+/// The value is whatever follows the first colon outside a quoted parameter
+/// — `LABEL="Join: dial-in"` must not end the name part early.
+#[must_use]
+pub fn conference_link(lines: &[String]) -> Option<String> {
+    lines.iter().find_map(|line| {
+        let name_end = line.find([';', ':'])?;
+        if !line[..name_end].eq_ignore_ascii_case("CONFERENCE") {
+            return None;
+        }
+        let mut quoted = false;
+        let colon = line.char_indices().find_map(|(index, c)| match c {
+            '"' => {
+                quoted = !quoted;
+                None
+            }
+            ':' if !quoted => Some(index),
+            _ => None,
+        })?;
+        let value = line[colon + 1..].trim();
+        value.starts_with("https://").then(|| value.to_owned())
+    })
 }
 
 fn find_in(text: &str) -> Option<String> {
@@ -90,6 +120,25 @@ mod tests {
             None
         );
         assert_eq!(meeting_link(Some("Kolonaki, Athens"), None), None);
+    }
+
+    #[test]
+    fn a_conference_property_names_the_way_in() {
+        let lines = vec![
+            "X-MICROSOFT-CDO-BUSYSTATUS:BUSY".to_owned(),
+            r#"CONFERENCE;VALUE=URI;FEATURE=VIDEO;LABEL="Join: video":https://video.example.org/r/42"#
+                .to_owned(),
+        ];
+        assert_eq!(
+            conference_link(&lines),
+            Some("https://video.example.org/r/42".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_dial_in_conference_is_not_a_link() {
+        let lines = vec!["CONFERENCE;VALUE=URI;FEATURE=PHONE:tel:+1-555-0100".to_owned()];
+        assert_eq!(conference_link(&lines), None);
     }
 
     #[test]

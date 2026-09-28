@@ -316,21 +316,28 @@ impl Editor {
             (start, end)
         };
 
+        let recurrence = Recurrence {
+            freq: self.freq,
+            interval: self.interval.parse().unwrap_or(1).max(1),
+            end: self.resolved_repeat_end(),
+        };
         let rrule = if self.is_override() {
             // An override describes one instance of somebody else's series; a
             // rule on it would fork a second series under the same UID.
             None
+        } else if let Some(raw) = &self.custom_rrule {
+            // Never rewrite a rule we could not fully parse.
+            Some(raw.clone())
+        } else if let Some(original) = &self.original
+            && original.rrule.is_some()
+            && original.recurrence() == Some(recurrence)
+        {
+            // Nor one the user left as it was. Parsing is lossy — `UNTIL`
+            // keeps only its UTC date, `WKST` is dropped — so re-rendering an
+            // untouched rule can move where the series ends.
+            original.rrule.clone()
         } else {
-            match &self.custom_rrule {
-                // Never rewrite a rule we could not fully parse.
-                Some(raw) => Some(raw.clone()),
-                None => Recurrence {
-                    freq: self.freq,
-                    interval: self.interval.parse().unwrap_or(1).max(1),
-                    end: self.resolved_repeat_end(),
-                }
-                .to_rrule(),
-            }
+            recurrence.to_rrule()
         };
 
         let mut event = match &self.original {
@@ -1141,6 +1148,57 @@ mod tests {
             "editing the title destroyed the recurrence rule"
         );
         assert_eq!(saved.summary, "Renamed standup");
+    }
+
+    #[test]
+    fn an_untouched_simple_rule_is_written_back_verbatim() {
+        // The end of 30 September in Los Angeles, as a client there writes
+        // it. The editor reads this as "ends 1 October" (the UTC date), and
+        // re-rendering it would widen the bound to 1 Oct 23:59:59Z — one more
+        // 09:00 PDT instance than the series had.
+        let mut event = Event::draft(
+            "personal",
+            NaiveDate::from_ymd_opt(2026, 9, 1)
+                .unwrap()
+                .and_hms_opt(16, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        );
+        event.summary = "Standup".into();
+        event.rrule = Some("FREQ=DAILY;WKST=MO;UNTIL=20261001T065959Z".into());
+
+        let mut editor = Editor::from_event(&event, chrono_tz::UTC);
+        editor.summary = "Renamed standup".into();
+
+        let saved = editor.to_event(chrono_tz::UTC).unwrap();
+        assert_eq!(
+            saved.rrule.as_deref(),
+            Some("FREQ=DAILY;WKST=MO;UNTIL=20261001T065959Z"),
+            "a title edit rewrote the recurrence rule"
+        );
+    }
+
+    #[test]
+    fn a_changed_simple_rule_is_rendered_from_the_fields() {
+        let mut event = Event::draft(
+            "personal",
+            NaiveDate::from_ymd_opt(2026, 9, 1)
+                .unwrap()
+                .and_hms_opt(9, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        );
+        event.summary = "Standup".into();
+        event.rrule = Some("FREQ=DAILY;COUNT=5".into());
+
+        let mut editor = Editor::from_event(&event, chrono_tz::UTC);
+        editor.interval = "2".into();
+
+        let saved = editor.to_event(chrono_tz::UTC).unwrap();
+        assert_eq!(
+            saved.rrule.as_deref(),
+            Some("FREQ=DAILY;INTERVAL=2;COUNT=5")
+        );
     }
 
     #[test]

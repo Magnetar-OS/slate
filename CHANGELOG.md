@@ -9,6 +9,9 @@ All notable user-facing changes to Slate. The format follows
 
 - The main window responds to the mouse again when maximised (libcosmic
   `03d7dcb`).
+- Saving an event without touching its repeat settings keeps its recurrence
+  rule exactly as written; a rule from another client could previously gain
+  or lose its last occurrence.
 
 ## [1.1.0] - 2026-09-22
 

@@ -8,11 +8,13 @@
 //!
 //! The scheduling decision is kept separate from the delivery so it can be tested
 //! against a fixed clock: [`Scheduler::due`] is pure, and [`notify`] is the only
-//! part that touches D-Bus.
+//! part that shows anything. [`due_reminders`] and [`missed_reminders`] put the
+//! two together over a [`Store`] — the one sweep the app and the daemon share.
 
 use crate::config::Config;
 use crate::fl;
 use crate::model::Occurrence;
+use crate::store::Store;
 use chrono::{Duration, NaiveDateTime};
 use std::collections::HashSet;
 
@@ -168,6 +170,94 @@ impl Scheduler {
     pub fn tracked(&self) -> usize {
         self.fired.len()
     }
+}
+
+/// How far ahead of today a sweep looks for events whose alarms are due.
+const LOOKAHEAD_DAYS: i64 = 2;
+
+/// The component behind one occurrence, for its alarms.
+///
+/// Instance-aware: an overridden occurrence carries its own VALARMs (a moved
+/// meeting reminds relative to its new time), and only falls back to the
+/// series master's.
+fn instance(store: &Store, occurrence: &Occurrence) -> Option<crate::model::Event> {
+    store
+        .event_instance(
+            &occurrence.calendar_id,
+            &occurrence.uid,
+            occurrence.recurrence_id,
+        )
+        .ok()
+        .flatten()
+}
+
+/// The sweep both the app and the daemon run: every reminder due at `now`,
+/// each at most once.
+///
+/// # Errors
+///
+/// When the store cannot list occurrences.
+pub fn due_reminders(
+    store: &Store,
+    scheduler: &mut Scheduler,
+    config: &Config,
+    now: NaiveDateTime,
+) -> Result<Vec<Reminder>, crate::store::StoreError> {
+    let today = now.date();
+    let occurrences = store.occurrences(
+        today,
+        today + Duration::days(LOOKAHEAD_DAYS),
+        &config.hidden_set(),
+    )?;
+
+    let due = scheduler.due(
+        &occurrences,
+        |occurrence| {
+            instance(store, occurrence)
+                .map(|event| event.alarms)
+                .unwrap_or_default()
+        },
+        now,
+        |occurrence| config.reminder_for(&occurrence.calendar_id),
+    );
+
+    // Keep the fired set from growing for the lifetime of the process.
+    scheduler.forget_before(now - Duration::days(1));
+    Ok(due)
+}
+
+/// The digest's count: the alarms that passed between `slept_at` and `now`,
+/// marked shown so none of them fires late.
+///
+/// # Errors
+///
+/// When the store cannot list occurrences.
+pub fn missed_reminders(
+    store: &Store,
+    scheduler: &mut Scheduler,
+    config: &Config,
+    slept_at: NaiveDateTime,
+    now: NaiveDateTime,
+) -> Result<usize, crate::store::StoreError> {
+    // A day either side of the window covers any plausible suspend.
+    let occurrences = store.occurrences(
+        slept_at.date() - Duration::days(1),
+        now.date() + Duration::days(1),
+        &config.hidden_set(),
+    )?;
+
+    Ok(sweep_missed(
+        scheduler,
+        &occurrences,
+        |occurrence| {
+            instance(store, occurrence)
+                .map(|event| event.alarms)
+                .unwrap_or_default()
+        },
+        slept_at,
+        now,
+        |occurrence| config.reminder_for(&occurrence.calendar_id),
+    ))
 }
 
 /// Well-known bus name claimed by whichever process is responsible for firing

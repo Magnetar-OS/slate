@@ -20,10 +20,8 @@
 //! own reminders exactly while it is held, so having both running does not
 //! double every notification, and the daemon stopping does not silence them.
 
-use chrono::Duration;
 use cosmic_pim_accounts::AccountStore;
 use slate::config::Config;
-use slate::model::Occurrence;
 use slate::reminders::{self, Scheduler};
 use slate::store::{Store, watcher};
 
@@ -287,49 +285,22 @@ fn signals() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> 
     })
 }
 
-/// One pass: reload config, look at the next two days, notify whatever is due.
-/// Fires whatever is due, and returns the instant it looked — the start of
-/// the next sleep window.
+/// One pass: reload config, notify whatever is due. Returns the instant it
+/// looked — the start of the next sleep window.
 async fn check(store: &mut Store, scheduler: &mut Scheduler) -> chrono::NaiveDateTime {
     // Re-read each pass so a settings change takes effect without a restart.
     let config = load_config();
     let now = chrono::Local::now().naive_local();
-    let today = now.date();
 
-    let occurrences =
-        match store.occurrences(today, today + Duration::days(2), &config.hidden_set()) {
-            Ok(occurrences) => occurrences,
-            Err(why) => {
-                tracing::warn!(%why, "could not load occurrences");
-                return now;
+    match reminders::due_reminders(store, scheduler, &config, now) {
+        Ok(due) => {
+            for reminder in &due {
+                tracing::info!(summary = %reminder.summary, "reminder due");
+                reminders::notify(reminder, APP_ID, reminder.body(&config)).await;
             }
-        };
-
-    // Instance-aware: an overridden occurrence carries its own VALARMs, and
-    // only falls back to the series master's.
-    let alarms_for = |occurrence: &Occurrence| {
-        store
-            .event_instance(
-                &occurrence.calendar_id,
-                &occurrence.uid,
-                occurrence.recurrence_id,
-            )
-            .ok()
-            .flatten()
-            .map(|event| event.alarms)
-            .unwrap_or_default()
-    };
-
-    let due = scheduler.due(&occurrences, alarms_for, now, |occurrence| {
-        config.reminder_for(&occurrence.calendar_id)
-    });
-
-    for reminder in &due {
-        tracing::info!(summary = %reminder.summary, "reminder due");
-        reminders::notify(reminder, APP_ID, reminder.body(&config)).await;
+        }
+        Err(why) => tracing::warn!(%why, "could not load occurrences"),
     }
-
-    scheduler.forget_before(now - Duration::days(1));
     now
 }
 
@@ -342,39 +313,13 @@ async fn report_missed(
     let config = load_config();
     let now = chrono::Local::now().naive_local();
 
-    // A day either side of the window covers any plausible suspend.
-    let Ok(occurrences) = store.occurrences(
-        slept_at.date() - Duration::days(1),
-        now.date() + Duration::days(1),
-        &config.hidden_set(),
-    ) else {
-        return;
-    };
-
-    let alarms_for = |occurrence: &Occurrence| {
-        store
-            .event_instance(
-                &occurrence.calendar_id,
-                &occurrence.uid,
-                occurrence.recurrence_id,
-            )
-            .ok()
-            .flatten()
-            .map(|event| event.alarms)
-            .unwrap_or_default()
-    };
-
-    let missed = reminders::sweep_missed(
-        scheduler,
-        &occurrences,
-        alarms_for,
-        slept_at,
-        now,
-        |occurrence| config.reminder_for(&occurrence.calendar_id),
-    );
-    if missed > 0 {
-        tracing::info!(missed, "reminders passed while asleep");
-        reminders::notify_missed(missed, APP_ID).await;
+    match reminders::missed_reminders(store, scheduler, &config, slept_at, now) {
+        Ok(missed) if missed > 0 => {
+            tracing::info!(missed, "reminders passed while asleep");
+            reminders::notify_missed(missed, APP_ID).await;
+        }
+        Ok(_) => {}
+        Err(why) => tracing::warn!(%why, "could not load occurrences"),
     }
 }
 

@@ -2665,10 +2665,6 @@ impl AppModel {
         )
     }
 
-    /// Shows any reminder whose trigger has just passed.
-    ///
-    /// Reminders are checked against the store rather than the currently visible
-    /// range, so they still fire while you are looking at a different month.
     /// One notification for the reminders that passed while asleep.
     ///
     /// Same ownership rule as [`Self::fire_due_reminders`]: if the daemon is
@@ -2684,37 +2680,19 @@ impl AppModel {
             return Task::none();
         };
 
-        // A day either side of the window covers any plausible suspend.
-        let from = slept_at.date() - Duration::days(1);
-        let Ok(occurrences) = store.occurrences(
-            from,
-            self.now.date() + Duration::days(1),
-            &self.config.hidden_set(),
-        ) else {
-            return Task::none();
-        };
-
-        let alarms_for = |occurrence: &Occurrence| {
-            store
-                .event_instance(
-                    &occurrence.calendar_id,
-                    &occurrence.uid,
-                    occurrence.recurrence_id,
-                )
-                .ok()
-                .flatten()
-                .map(|event| event.alarms)
-                .unwrap_or_default()
-        };
-
-        let missed = crate::reminders::sweep_missed(
+        let missed = match crate::reminders::missed_reminders(
+            store,
             &mut self.reminders,
-            &occurrences,
-            alarms_for,
+            &self.config,
             slept_at,
             self.now,
-            |occurrence| self.config.reminder_for(&occurrence.calendar_id),
-        );
+        ) {
+            Ok(missed) => missed,
+            Err(why) => {
+                tracing::warn!(%why, "could not load occurrences to count missed reminders");
+                return Task::none();
+            }
+        };
 
         if missed == 0 {
             return Task::none();
@@ -2726,6 +2704,10 @@ impl AppModel {
         })
     }
 
+    /// Shows any reminder whose trigger has just passed.
+    ///
+    /// Reminders are checked against the store rather than the currently visible
+    /// range, so they still fire while you are looking at a different month.
     fn fire_due_reminders(&mut self) -> Task<cosmic::Action<Message>> {
         // The daemon has it covered; firing here too would double every reminder.
         if self.reminders_delegated {
@@ -2736,64 +2718,33 @@ impl AppModel {
             return Task::none();
         };
 
-        let today = self.now.date();
-        let occurrences =
-            match store.occurrences(today, today + Duration::days(2), &self.config.hidden_set()) {
-                Ok(occurrences) => occurrences,
-                Err(why) => {
-                    tracing::warn!(%why, "could not load occurrences to check reminders");
-                    return Task::none();
-                }
-            };
-
-        // Map an occurrence back to its alarms. Instance-aware: an overridden
-        // occurrence carries its own VALARMs (a moved meeting reminds relative
-        // to its new time), and only falls back to the series master's.
-        let alarms_for = |occurrence: &Occurrence| {
-            store
-                .event_instance(
-                    &occurrence.calendar_id,
-                    &occurrence.uid,
-                    occurrence.recurrence_id,
-                )
-                .ok()
-                .flatten()
-                .map(|event| event.alarms)
-                .unwrap_or_default()
-        };
-
         self.last_reminder_sweep = self.now;
-        let due = self
-            .reminders
-            .due(&occurrences, alarms_for, self.now, |occurrence| {
-                self.config.reminder_for(&occurrence.calendar_id)
-            });
+        let due = match crate::reminders::due_reminders(
+            store,
+            &mut self.reminders,
+            &self.config,
+            self.now,
+        ) {
+            Ok(due) => due,
+            Err(why) => {
+                tracing::warn!(%why, "could not load occurrences to check reminders");
+                return Task::none();
+            }
+        };
 
         if !due.is_empty() {
             tracing::info!(count = due.len(), "firing reminders");
         }
 
         // Delivery is a D-Bus round trip, so it happens off the update loop.
-        let tasks: Vec<_> = due
-            .into_iter()
-            .map(|reminder| {
-                let body = reminder.body(&self.config);
-                cosmic::task::future(async move {
-                    crate::reminders::notify(
-                        &reminder,
-                        <Self as cosmic::Application>::APP_ID,
-                        body,
-                    )
+        Task::batch(due.into_iter().map(|reminder| {
+            let body = reminder.body(&self.config);
+            cosmic::task::future(async move {
+                crate::reminders::notify(&reminder, <Self as cosmic::Application>::APP_ID, body)
                     .await;
-                    Message::Ignore
-                })
+                Message::Ignore
             })
-            .collect();
-
-        // Keep the fired set from growing for the lifetime of the process.
-        self.reminders.forget_before(self.now - Duration::days(1));
-
-        Task::batch(tasks)
+        }))
     }
 
     fn editor_view(&self) -> Element<'_, Message> {

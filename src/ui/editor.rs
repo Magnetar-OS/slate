@@ -119,6 +119,33 @@ fn explicit_zone(time: EventTime, local: Tz) -> Option<Tz> {
     }
 }
 
+/// The time to save for `wall`, a wall clock the editor showed in `picked`
+/// (a zone the user chose) or, without one, in the viewer's `local` zone.
+///
+/// A chosen zone is written as that zone. Otherwise the value keeps the form
+/// it had: a floating time ("09:00 wherever I am") stays floating, and a UTC
+/// stamp stays UTC — at the same instant the fields showed in local time.
+/// Rewriting either as `TZID=local` would change what the event means to
+/// every other client, over a title edit.
+fn in_original_form(
+    wall: NaiveDateTime,
+    picked: Option<Tz>,
+    original: Option<EventTime>,
+    local: Tz,
+) -> EventTime {
+    if let Some(zone) = picked {
+        return EventTime::Zoned(wall, zone);
+    }
+    match original {
+        Some(EventTime::Floating(_)) => EventTime::Floating(wall),
+        Some(EventTime::Zoned(_, zone)) if zone == chrono_tz::UTC => EventTime::Zoned(
+            EventTime::Zoned(wall, local).to_utc(local).naive_utc(),
+            chrono_tz::UTC,
+        ),
+        _ => EventTime::Zoned(wall, local),
+    }
+}
+
 /// Wall clock of `time` in `zone`. All-day and floating values are already
 /// wall clock; zoned ones convert through their instant.
 fn wall_in(time: EventTime, zone: Tz, local: Tz) -> NaiveDateTime {
@@ -302,10 +329,19 @@ impl Editor {
             let end_time =
                 parse_time(&self.end_time).ok_or_else(|| fl!("error-invalid-time-range"))?;
 
-            let start_zone = self.start_tz.unwrap_or(local);
-            let end_zone = self.end_tz.unwrap_or(start_zone);
-            let start = EventTime::Zoned(self.start_date.and_time(start_time), start_zone);
-            let end = EventTime::Zoned(self.end_date.and_time(end_time), end_zone);
+            let original = self.original.as_ref();
+            let start = in_original_form(
+                self.start_date.and_time(start_time),
+                self.start_tz,
+                original.map(|event| event.start),
+                local,
+            );
+            let end = in_original_form(
+                self.end_date.and_time(end_time),
+                self.end_tz.or(self.start_tz),
+                original.map(|event| event.end),
+                local,
+            );
 
             // Compared as instants, not wall clocks: a flight can land at an
             // earlier wall-clock time than it took off.
@@ -1161,6 +1197,54 @@ mod tests {
             "editing the title destroyed the recurrence rule"
         );
         assert_eq!(saved.summary, "Renamed standup");
+    }
+
+    #[test]
+    fn a_floating_time_stays_floating() {
+        let athens = chrono_tz::Europe::Athens;
+        let nine = NaiveDate::from_ymd_opt(2026, 8, 4)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap();
+        let mut event = Event::draft("personal", nine, athens);
+        event.summary = "Stretch".into();
+        event.start = EventTime::Floating(nine);
+        event.end = EventTime::Floating(nine + chrono::Duration::minutes(15));
+
+        let mut editor = Editor::from_event(&event, athens);
+        editor.summary = "Stretch properly".into();
+        let saved = editor.to_event(athens).unwrap();
+
+        assert_eq!(saved.start, EventTime::Floating(nine));
+        assert_eq!(
+            saved.end,
+            EventTime::Floating(nine + chrono::Duration::minutes(15))
+        );
+    }
+
+    #[test]
+    fn a_utc_time_stays_utc_at_the_same_instant() {
+        let athens = chrono_tz::Europe::Athens;
+        let six_utc = NaiveDate::from_ymd_opt(2026, 8, 4)
+            .unwrap()
+            .and_hms_opt(6, 0, 0)
+            .unwrap();
+        let mut event = Event::draft("personal", six_utc, athens);
+        event.summary = "Call".into();
+        event.start = EventTime::Zoned(six_utc, chrono_tz::UTC);
+        event.end = EventTime::Zoned(six_utc + chrono::Duration::hours(1), chrono_tz::UTC);
+
+        // Shown as 09:00 in Athens; only the title changes.
+        let mut editor = Editor::from_event(&event, athens);
+        assert_eq!(editor.start_time, "09:00");
+        editor.summary = "Call with the team".into();
+        let saved = editor.to_event(athens).unwrap();
+
+        assert_eq!(saved.start, EventTime::Zoned(six_utc, chrono_tz::UTC));
+        assert_eq!(
+            saved.end,
+            EventTime::Zoned(six_utc + chrono::Duration::hours(1), chrono_tz::UTC)
+        );
     }
 
     #[test]

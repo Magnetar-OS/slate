@@ -69,6 +69,8 @@ All notable user-facing changes to Slate. The format follows
   recorded since the app started.
 - Export asks which calendar to save, instead of always exporting the first
   one on disk.
+- Editing an event whose time is floating or in UTC keeps it that way, instead
+  of pinning it to the local time zone.
 
 ## [1.1.0] - 2026-09-22
 

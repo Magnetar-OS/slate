@@ -309,14 +309,7 @@ impl Applet {
         let to = from + Duration::days(HORIZON_DAYS);
 
         match store.occurrences(from, to, &self.config.hidden_set()) {
-            Ok(occurrences) => {
-                // Anything already finished is not "upcoming".
-                self.upcoming = occurrences
-                    .into_iter()
-                    .filter(|o| o.all_day || o.end > self.now)
-                    .take(MAX_LISTED)
-                    .collect();
-            }
+            Ok(occurrences) => self.upcoming = upcoming(occurrences, self.today, self.now),
             Err(why) => {
                 tracing::warn!(%why, "applet could not load occurrences");
                 self.upcoming.clear();
@@ -474,6 +467,25 @@ impl Applet {
     }
 }
 
+/// What the popup lists, in the order it reads: grouped by the day each
+/// entry is listed under, all-day entries first within a day, then by start.
+///
+/// The store sorts all-day entries ahead of *every* timed one across the
+/// whole range — right for one day's cell, wrong for a week: Thursday's
+/// all-day entry would open the list above this morning's meeting, repeat a
+/// date heading, and take a slot from something sooner. Anything already
+/// finished is not "upcoming".
+fn upcoming(occurrences: Vec<Occurrence>, today: NaiveDate, now: NaiveDateTime) -> Vec<Occurrence> {
+    let mut upcoming: Vec<Occurrence> = occurrences
+        .into_iter()
+        .filter(|o| o.all_day || o.end > now)
+        .collect();
+    // The same day `popup_content` puts the heading on.
+    upcoming.sort_by_key(|o| (o.start.date().max(today), !o.all_day, o.start));
+    upcoming.truncate(MAX_LISTED);
+    upcoming
+}
+
 fn day_heading(date: NaiveDate, today: NaiveDate) -> String {
     let delta = (date - today).num_days();
     match delta {
@@ -562,4 +574,69 @@ fn file_watch() -> Subscription<Message> {
             },
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn at(d: u32, h: u32) -> NaiveDateTime {
+        NaiveDate::from_ymd_opt(2026, 8, d)
+            .unwrap()
+            .and_hms_opt(h, 0, 0)
+            .unwrap()
+    }
+
+    fn occurrence(
+        summary: &str,
+        start: NaiveDateTime,
+        end: NaiveDateTime,
+        all_day: bool,
+    ) -> Occurrence {
+        Occurrence {
+            uid: summary.into(),
+            calendar_id: "personal".into(),
+            summary: summary.into(),
+            location: None,
+            all_day,
+            start,
+            end,
+            recurrence_id: None,
+        }
+    }
+
+    #[test]
+    fn a_later_all_day_entry_does_not_jump_the_queue() {
+        // Monday 3 Aug at 08:00. The store hands these over all-day first.
+        let today = NaiveDate::from_ymd_opt(2026, 8, 3).unwrap();
+        let now = at(3, 8);
+        let from_store = vec![
+            occurrence("Holiday", at(6, 0), at(7, 0), true),
+            occurrence("Standup", at(3, 9), at(3, 10), false),
+            occurrence("Review", at(4, 14), at(4, 15), false),
+        ];
+
+        let listed: Vec<String> = upcoming(from_store, today, now)
+            .into_iter()
+            .map(|o| o.summary)
+            .collect();
+        assert_eq!(listed, ["Standup", "Review", "Holiday"]);
+    }
+
+    #[test]
+    fn within_a_day_all_day_entries_lead_and_finished_ones_go() {
+        let today = NaiveDate::from_ymd_opt(2026, 8, 3).unwrap();
+        let now = at(3, 12);
+        let from_store = vec![
+            occurrence("Holiday", at(3, 0), at(4, 0), true),
+            occurrence("Breakfast", at(3, 8), at(3, 9), false),
+            occurrence("Lunch", at(3, 13), at(3, 14), false),
+        ];
+
+        let listed: Vec<String> = upcoming(from_store, today, now)
+            .into_iter()
+            .map(|o| o.summary)
+            .collect();
+        assert_eq!(listed, ["Holiday", "Lunch"]);
+    }
 }

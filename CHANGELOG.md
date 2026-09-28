@@ -18,6 +18,8 @@ All notable user-facing changes to Slate. The format follows
 - Changing *all events* of a series: deleted occurrences stay deleted when the
   time moves, and switching the series to or from all-day now takes effect
   instead of writing a 24-hour timed block or an invalid all-day end.
+- The panel applet lists the week in order: an all-day event later in the week
+  no longer appears above today's meetings under a repeated date heading.
 
 ## [1.1.0] - 2026-09-22
 

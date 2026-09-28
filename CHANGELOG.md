@@ -50,6 +50,8 @@ All notable user-facing changes to Slate. The format follows
 - Moving an event to another calendar removes it from the old calendar's
   server, instead of leaving a copy there that the next sync brought back as a
   duplicate.
+- When a saved change cannot be queued for upload to its server, Slate says
+  so instead of reporting success.
 
 ## [1.1.0] - 2026-09-22
 

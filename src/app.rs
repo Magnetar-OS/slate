@@ -1653,7 +1653,7 @@ impl cosmic::Application for AppModel {
                 match store.save_todo(&todo) {
                     Ok(()) => {
                         // A fresh draft has no previous revision to merge against.
-                        queue_writeback_task(&todo, None);
+                        let queued = queue_writeback_file(&todo.calendar_id, &todo.file_name, None);
                         self.journal_finish(vec![crate::undo::Entry {
                             calendar_id: todo.calendar_id.clone(),
                             file_name: todo.file_name.clone(),
@@ -1662,6 +1662,7 @@ impl cosmic::Application for AppModel {
                         }]);
                         self.new_task.clear();
                         self.reload_tasks();
+                        return self.report_unqueued(queued);
                     }
                     Err(why) => return self.toast_error(&why.to_string()),
                 }
@@ -1682,7 +1683,11 @@ impl cosmic::Application for AppModel {
                 let base = writeback_base(store, &todo.calendar_id, &todo.file_name);
                 match store.save_todo(&todo) {
                     Ok(()) => {
-                        queue_writeback_task(&todo, base.as_deref());
+                        let queued = queue_writeback_file(
+                            &todo.calendar_id,
+                            &todo.file_name,
+                            base.as_deref(),
+                        );
                         self.journal_finish(vec![crate::undo::Entry {
                             calendar_id: todo.calendar_id.clone(),
                             file_name: todo.file_name.clone(),
@@ -1690,6 +1695,7 @@ impl cosmic::Application for AppModel {
                             after: None,
                         }]);
                         self.reload_tasks();
+                        return self.report_unqueued(queued);
                     }
                     Err(why) => return self.toast_error(&why.to_string()),
                 }
@@ -2454,11 +2460,12 @@ impl AppModel {
         let moved_before = moved_from
             .as_ref()
             .and_then(|original| writeback_base(store, &original.calendar_id, &original.file_name));
+        let mut queued = Ok(());
         if let Some(original) = &moved_from {
             if let Err(why) = store.delete_todo(&original.calendar_id, &original.uid) {
                 return self.toast_error(&why.to_string());
             }
-            queue_writeback_removal(
+            queued = queue_writeback_removal(
                 store,
                 &original.calendar_id,
                 &original.file_name,
@@ -2475,7 +2482,11 @@ impl AppModel {
         });
         match store.save_todo(&todo) {
             Ok(()) => {
-                queue_writeback_task(&todo, base.as_deref());
+                let queued = queued.and(queue_writeback_file(
+                    &todo.calendar_id,
+                    &todo.file_name,
+                    base.as_deref(),
+                ));
                 let mut journal = vec![crate::undo::Entry {
                     calendar_id: todo.calendar_id.clone(),
                     file_name: todo.file_name.clone(),
@@ -2487,7 +2498,7 @@ impl AppModel {
                 self.task_editor = None;
                 self.core.window.show_context = false;
                 self.reload_tasks();
-                Task::none()
+                self.report_unqueued(queued)
             }
             Err(why) => self.toast_error(&why.to_string()),
         }
@@ -2509,7 +2520,7 @@ impl AppModel {
         let before = writeback_base(store, &original.calendar_id, &original.file_name);
         match store.delete_todo(&original.calendar_id, &original.uid) {
             Ok(()) => {
-                queue_writeback_removal(
+                let queued = queue_writeback_removal(
                     store,
                     &original.calendar_id,
                     &original.file_name,
@@ -2524,7 +2535,7 @@ impl AppModel {
                 self.task_editor = None;
                 self.core.window.show_context = false;
                 self.reload_tasks();
-                Task::none()
+                self.report_unqueued(queued)
             }
             Err(why) => self.toast_error(&why.to_string()),
         }
@@ -3401,14 +3412,6 @@ impl AppModel {
             .unwrap_or_default()
     }
 
-    /// Queues writeback for a file iTIP changed.
-    fn queue_invitation_writeback(&self, collection_id: &str, file: &str) {
-        let root = crate::store::vdir::default_root();
-        if let Err(why) = cosmic_pim_sync::queue_save(&root, collection_id, file) {
-            tracing::warn!(%why, file, "could not queue the invitation for upload");
-        }
-    }
-
     fn refresh_after_invitation(&mut self) {
         if let Some(store) = self.store.as_mut() {
             let _ = store.refresh();
@@ -3439,6 +3442,7 @@ impl AppModel {
         let Some(me) = self.account_address(&invitation.account_id) else {
             return self.toast_error(&fl!("invitation-no-address"));
         };
+        let mut queued = Ok(());
 
         if answer != InviteAnswer::Declined {
             match itip::apply(&meta.path, &invitation.ics, &me) {
@@ -3448,7 +3452,7 @@ impl AppModel {
                 }
                 Ok(outcome) => {
                     if let Some(file) = outcome.file() {
-                        self.queue_invitation_writeback(&meta.id, file);
+                        queued = queue_writeback_file(&meta.id, file, None);
                     }
                 }
                 Err(why) => return self.toast_error(&why.to_string()),
@@ -3463,7 +3467,7 @@ impl AppModel {
         else {
             // No organizer, nothing to answer; whatever was stored, stands.
             self.refresh_after_invitation();
-            return Task::none();
+            return self.report_unqueued(queued);
         };
 
         let reply_ics = itip::build_reply(
@@ -3483,7 +3487,7 @@ impl AppModel {
             match itip::apply(&meta.path, &reply_ics, &me) {
                 Ok(outcome) => {
                     if let Some(file) = outcome.file() {
-                        self.queue_invitation_writeback(&meta.id, file);
+                        queued = queue_writeback_file(&meta.id, file, None);
                     }
                 }
                 Err(why) => tracing::warn!(%why, "could not record the PARTSTAT locally"),
@@ -3491,12 +3495,13 @@ impl AppModel {
         }
 
         self.refresh_after_invitation();
+        let unqueued = self.report_unqueued(queued);
 
         let Some(conn) = self.dbus.clone() else {
-            return self.toast_info(&fl!("invitation-reply-by-mail"));
+            return Task::batch([unqueued, self.toast_info(&fl!("invitation-reply-by-mail"))]);
         };
         let account_id = invitation.account_id.clone();
-        cosmic::task::future(async move {
+        let reply = cosmic::task::future(async move {
             let queued = crate::scheduling::send_reply(&conn, &reply_ics, &account_id, &organizer)
                 .await
                 .unwrap_or_else(|why| {
@@ -3504,7 +3509,8 @@ impl AppModel {
                     false
                 });
             Message::InvitationReplySent(queued)
-        })
+        });
+        Task::batch([unqueued, reply])
     }
 
     /// Applies a CANCEL or REPLY without asking: neither carries a decision
@@ -3523,26 +3529,24 @@ impl AppModel {
             .unwrap_or_default();
         match cosmic_pim_caldav::itip::apply(&meta.path, &delivery.ics, &me) {
             Ok(outcome) => {
-                if let Some(file) = outcome.file() {
-                    self.queue_invitation_writeback(&meta.id, file);
-                }
-                // A whole-series CANCEL removed the file; the deletion must
-                // reach the server too.
-                if let Outcome::Cancelled { file } = &outcome {
-                    let root = crate::store::vdir::default_root();
-                    if let Err(why) = cosmic_pim_sync::queue_delete(&root, &meta.id, file) {
-                        tracing::warn!(%why, file, "could not queue the cancellation for upload");
-                    }
-                }
+                let queued = match &outcome {
+                    // A whole-series CANCEL removed the file; the deletion
+                    // must reach the server too.
+                    Outcome::Cancelled { file } => queue_writeback_delete_file(&meta.id, file),
+                    other => other
+                        .file()
+                        .map_or(Ok(()), |file| queue_writeback_file(&meta.id, file, None)),
+                };
                 let cancelled = matches!(
                     outcome,
                     Outcome::Cancelled { .. } | Outcome::InstanceCancelled { .. }
                 );
                 self.refresh_after_invitation();
+                let unqueued = self.report_unqueued(queued);
                 if cancelled {
-                    return self.toast_info(&fl!("invitation-cancelled"));
+                    return Task::batch([unqueued, self.toast_info(&fl!("invitation-cancelled"))]);
                 }
-                Task::none()
+                unqueued
             }
             Err(why) => {
                 tracing::warn!(%why, "could not apply an iTIP payload");
@@ -3644,7 +3648,7 @@ impl AppModel {
 
         match store.save(&event) {
             Ok(()) => {
-                queue_writeback_save(&event, None);
+                let queued = queue_writeback_file(&event.calendar_id, &event.file_name, None);
                 self.journal_finish(vec![crate::undo::Entry {
                     calendar_id: event.calendar_id.clone(),
                     file_name: event.file_name.clone(),
@@ -3654,7 +3658,10 @@ impl AppModel {
                 self.anchor = parsed.date;
                 self.sync_mini();
                 self.reload();
-                self.toast(&fl!("quick-add-done", summary = parsed.summary))
+                Task::batch([
+                    self.toast(&fl!("quick-add-done", summary = parsed.summary)),
+                    self.report_unqueued(queued),
+                ])
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
         }
@@ -3699,6 +3706,7 @@ impl AppModel {
             return Task::none();
         };
 
+        let mut queued = Ok(());
         for entry in &group.entries {
             let Some(meta) = self
                 .store
@@ -3715,7 +3723,6 @@ impl AppModel {
             let path = meta.path.join(&entry.file_name);
             let current = std::fs::read_to_string(&path).ok();
             let desired = if undo { &entry.before } else { &entry.after };
-            let root = crate::store::vdir::default_root();
 
             match desired {
                 Some(bytes) => {
@@ -3723,14 +3730,11 @@ impl AppModel {
                         tracing::warn!(%why, file = entry.file_name, "history restore failed");
                         continue;
                     }
-                    if let Err(why) = cosmic_pim_sync::queue_save_with_base(
-                        &root,
+                    queued = queued.and(queue_writeback_file(
                         &entry.calendar_id,
                         &entry.file_name,
                         current.as_deref(),
-                    ) {
-                        tracing::warn!(%why, "could not queue the restored file for upload");
-                    }
+                    ));
                 }
                 None => {
                     if let Err(why) = std::fs::remove_file(&path)
@@ -3739,11 +3743,10 @@ impl AppModel {
                         tracing::warn!(%why, file = entry.file_name, "history removal failed");
                         continue;
                     }
-                    if let Err(why) =
-                        cosmic_pim_sync::queue_delete(&root, &entry.calendar_id, &entry.file_name)
-                    {
-                        tracing::warn!(%why, "could not queue the removal for upload");
-                    }
+                    queued = queued.and(queue_writeback_delete_file(
+                        &entry.calendar_id,
+                        &entry.file_name,
+                    ));
                 }
             }
         }
@@ -3754,11 +3757,15 @@ impl AppModel {
         }
         self.reload();
         self.reload_tasks();
-        self.toast(&if undo {
-            fl!("undo-done")
-        } else {
-            fl!("redo-done")
-        })
+        let unqueued = self.report_unqueued(queued);
+        Task::batch([
+            self.toast(&if undo {
+                fl!("undo-done")
+            } else {
+                fl!("redo-done")
+            }),
+            unqueued,
+        ])
     }
 
     /// Recomputes search results for `query`: summaries and locations across
@@ -4144,22 +4151,23 @@ impl AppModel {
 
         match result {
             Ok(()) => {
-                queue_writeback_save(&event, base.as_deref());
+                let mut queued =
+                    queue_writeback_file(&event.calendar_id, &event.file_name, base.as_deref());
                 // The old calendar's server still holds it; without this the
                 // next sync brings it back as a duplicate.
                 if let Some(original) = &moved_from {
-                    queue_writeback_removal(
+                    queued = queued.and(queue_writeback_removal(
                         store,
                         &original.calendar_id,
                         &original.file_name,
                         moved_base.as_deref(),
-                    );
+                    ));
                 }
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
-                Task::none()
+                self.report_unqueued(queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
         }
@@ -4240,20 +4248,21 @@ impl AppModel {
 
         match result {
             Ok(()) => {
-                queue_writeback_save(&event, base.as_deref());
+                let mut queued =
+                    queue_writeback_file(&event.calendar_id, &event.file_name, base.as_deref());
                 if moved {
-                    queue_writeback_removal(
+                    queued = queued.and(queue_writeback_removal(
                         store,
                         &master.calendar_id,
                         &master.file_name,
                         master_base.as_deref(),
-                    );
+                    ));
                 }
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
-                Task::none()
+                self.report_unqueued(queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
         }
@@ -4318,14 +4327,16 @@ impl AppModel {
         match result {
             Ok(()) => {
                 // Two files changed: the truncated master and the successor.
-                if let Ok(Some(truncated)) = self
-                    .store
-                    .as_ref()
-                    .map_or(Ok(None), |s| s.event(&master.calendar_id, &master.uid))
-                {
-                    queue_writeback_save(&truncated, master_base.as_deref());
-                }
-                queue_writeback_save(&series, None);
+                let queued = queue_writeback_file(
+                    &master.calendar_id,
+                    &master.file_name,
+                    master_base.as_deref(),
+                )
+                .and(queue_writeback_file(
+                    &series.calendar_id,
+                    &series.file_name,
+                    None,
+                ));
 
                 // One undo step for the whole split: the master's pre-split
                 // bytes come back, the successor file (wherever it landed)
@@ -4357,7 +4368,7 @@ impl AppModel {
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
-                Task::none()
+                self.report_unqueued(queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
         }
@@ -4394,30 +4405,26 @@ impl AppModel {
 
         match result {
             Ok(deleted_whole) => {
-                if deleted_whole {
+                let queued = if deleted_whole {
                     // Gone locally; tell the server too — or, if the file
                     // held other records, send what is left of it.
-                    if let Some(store) = self.store.as_ref() {
+                    self.store.as_ref().map_or(Ok(()), |store| {
                         queue_writeback_removal(
                             store,
                             &master.calendar_id,
                             &master.file_name,
                             base.as_deref(),
-                        );
-                    }
-                } else if let Ok(Some(after)) = self
-                    .store
-                    .as_ref()
-                    .map_or(Ok(None), |s| s.event(&master.calendar_id, &master.uid))
-                {
+                        )
+                    })
+                } else {
                     // The master changed (EXDATE or UNTIL); push the new revision.
-                    queue_writeback_save(&after, base.as_deref());
-                }
+                    queue_writeback_file(&master.calendar_id, &master.file_name, base.as_deref())
+                };
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
-                Task::none()
+                self.report_unqueued(queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-delete-event"))),
         }
@@ -4463,7 +4470,7 @@ impl AppModel {
                 // removal leaves its series in the file, which must be sent
                 // as it now is — deleting the resource would delete the
                 // whole series on the server.
-                queue_writeback_removal(
+                let queued = queue_writeback_removal(
                     store,
                     &original.calendar_id,
                     &original.file_name,
@@ -4473,7 +4480,7 @@ impl AppModel {
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
-                Task::none()
+                self.report_unqueued(queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-delete-event"))),
         }
@@ -4512,6 +4519,15 @@ impl AppModel {
                 ))
             }
             Err(why) => self.toast_error(&why.to_string()),
+        }
+    }
+
+    /// Tells the user when a change saved on this computer will not reach
+    /// its server. See [`Queued`].
+    fn report_unqueued(&mut self, queued: Queued) -> Task<cosmic::Action<Message>> {
+        match queued {
+            Ok(()) => Task::none(),
+            Err(why) => self.toast_error(&fl!("error-not-queued", reason = why)),
         }
     }
 
@@ -4791,26 +4807,39 @@ fn sleep_subscription() -> Subscription<Message> {
     })
 }
 
-/// Queues a saved event for upload to its CalDAV server, if it has one.
+/// Whether a saved change made it into its server's upload queue; the error
+/// is what the user is told.
 ///
-/// Failures are logged rather than surfaced: the *save* succeeded, the user's
-/// data is safe on disk, and the push queue retries on its own schedule. A
-/// toast here would report a problem the user can do nothing about and that
-/// will very likely resolve itself.
+/// The queue is the only road a local edit has to the server, and nothing
+/// retries an entry that never got into it: a failure here means the change
+/// stays on this computer, so it is reported rather than logged.
+type Queued = Result<(), String>;
+
+/// Queues a written file for upload to its CalDAV server, if it has one.
+///
 /// `base` is the file's bytes from *before* this session's edit; with it, the
 /// push queue can three-way-merge a concurrent server-side change instead of
 /// recording a conflict. `None` (new file, or the read failed) degrades to
 /// the plain no-merge queue.
-fn queue_writeback_save(event: &crate::model::Event, base: Option<&str>) {
+fn queue_writeback_file(calendar_id: &str, file_name: &str, base: Option<&str>) -> Queued {
     let root = crate::store::vdir::default_root();
-    if let Err(why) =
-        cosmic_pim_sync::queue_save_with_base(&root, &event.calendar_id, &event.file_name, base)
-    {
-        tracing::warn!(
-            calendar = event.calendar_id, file = event.file_name, %why,
-            "could not queue the edit for upload"
-        );
-    }
+    cosmic_pim_sync::queue_save_with_base(&root, calendar_id, file_name, base)
+        .map(|_| ())
+        .map_err(|why| {
+            tracing::warn!(calendar = calendar_id, file = file_name, %why, "could not queue the change for upload");
+            why.to_string()
+        })
+}
+
+/// Queues a removed file's deletion on its CalDAV server, if it had one.
+fn queue_writeback_delete_file(calendar_id: &str, file_name: &str) -> Queued {
+    let root = crate::store::vdir::default_root();
+    cosmic_pim_sync::queue_delete(&root, calendar_id, file_name)
+        .map(|_| ())
+        .map_err(|why| {
+            tracing::warn!(calendar = calendar_id, file = file_name, %why, "could not queue the deletion for upload");
+            why.to_string()
+        })
 }
 
 /// Reads every contact from the suite's address books, for birthday display.
@@ -4925,22 +4954,18 @@ fn removal_after(file: &std::path::Path) -> Removal {
 /// Queues what the server needs after a record left `file_name` in
 /// `calendar_id` — deleted, or moved to another calendar. `base` is the
 /// file's bytes before the change, for the writeback merge.
-fn queue_writeback_removal(store: &Store, calendar_id: &str, file_name: &str, base: Option<&str>) {
+fn queue_writeback_removal(
+    store: &Store,
+    calendar_id: &str,
+    file_name: &str,
+    base: Option<&str>,
+) -> Queued {
     let Some(meta) = store.calendar(calendar_id) else {
-        return;
+        return Ok(());
     };
-    let root = crate::store::vdir::default_root();
-    let queued = match removal_after(&meta.path.join(file_name)) {
-        Removal::Delete => cosmic_pim_sync::queue_delete(&root, calendar_id, file_name),
-        Removal::Rewrite => {
-            cosmic_pim_sync::queue_save_with_base(&root, calendar_id, file_name, base)
-        }
-    };
-    if let Err(why) = queued {
-        tracing::warn!(
-            calendar = calendar_id, file = file_name, %why,
-            "could not queue the removal for upload"
-        );
+    match removal_after(&meta.path.join(file_name)) {
+        Removal::Delete => queue_writeback_delete_file(calendar_id, file_name),
+        Removal::Rewrite => queue_writeback_file(calendar_id, file_name, base),
     }
 }
 
@@ -4953,19 +4978,6 @@ fn is_loopback(url: &str) -> bool {
         .next()
         .unwrap_or_default();
     host == "localhost" || host == "127.0.0.1" || host == "::1"
-}
-
-/// Queues a saved task for upload, the same way a saved event is.
-fn queue_writeback_task(todo: &crate::model::Todo, base: Option<&str>) {
-    let root = crate::store::vdir::default_root();
-    if let Err(why) =
-        cosmic_pim_sync::queue_save_with_base(&root, &todo.calendar_id, &todo.file_name, base)
-    {
-        tracing::warn!(
-            calendar = todo.calendar_id, file = todo.file_name, %why,
-            "could not queue the task for upload"
-        );
-    }
 }
 
 #[cfg(test)]

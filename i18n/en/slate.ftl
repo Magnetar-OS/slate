@@ -159,6 +159,8 @@ sync-now = Sync now
 syncing = Syncing…
 # The reminder daemon runs sync while it is up; this is its failure to.
 sync-daemon-failed = The background service could not sync: { $reason }
+# A change was saved locally, but its upload to the server could not be queued.
+error-not-queued = Saved on this computer, but it could not be queued for upload to the server: { $reason }
 error-no-account-store = Account storage is unavailable, so accounts cannot be saved.
 error-url-scheme = The server address must start with https://
 error-url-insecure = Refusing to send your password over an unencrypted connection. Use https://

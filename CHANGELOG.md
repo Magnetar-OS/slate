@@ -44,6 +44,12 @@ All notable user-facing changes to Slate. The format follows
   that could lose queued changes; reminders no longer wait on a sync pass.
 - A link whose host only contains a meeting service's name, such as
   `zoom.us.example.net`, no longer gets a Join button.
+- Deleting one changed occurrence of a repeating event no longer deletes the
+  whole series from the CalDAV server, and deleting one of several tasks
+  stored together no longer deletes the others there.
+- Moving an event to another calendar removes it from the old calendar's
+  server, instead of leaving a copy there that the next sync brought back as a
+  duplicate.
 
 ## [1.1.0] - 2026-09-22
 

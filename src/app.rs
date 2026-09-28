@@ -2455,10 +2455,15 @@ impl AppModel {
             .as_ref()
             .and_then(|original| writeback_base(store, &original.calendar_id, &original.file_name));
         if let Some(original) = &moved_from {
-            queue_writeback_task_delete(original);
             if let Err(why) = store.delete_todo(&original.calendar_id, &original.uid) {
                 return self.toast_error(&why.to_string());
             }
+            queue_writeback_removal(
+                store,
+                &original.calendar_id,
+                &original.file_name,
+                moved_before.as_deref(),
+            );
         }
 
         let base = writeback_base(store, &todo.calendar_id, &todo.file_name);
@@ -2502,9 +2507,14 @@ impl AppModel {
         };
 
         let before = writeback_base(store, &original.calendar_id, &original.file_name);
-        queue_writeback_task_delete(&original);
         match store.delete_todo(&original.calendar_id, &original.uid) {
             Ok(()) => {
+                queue_writeback_removal(
+                    store,
+                    &original.calendar_id,
+                    &original.file_name,
+                    before.as_deref(),
+                );
                 self.journal_finish(vec![crate::undo::Entry {
                     calendar_id: original.calendar_id.clone(),
                     file_name: original.file_name.clone(),
@@ -4114,6 +4124,9 @@ impl AppModel {
         };
 
         let base = writeback_base(store, &event.calendar_id, &event.file_name);
+        let moved_base = moved_from
+            .as_ref()
+            .and_then(|original| writeback_base(store, &original.calendar_id, &original.file_name));
         let mut journal = vec![self.journal_before(&event.calendar_id, &event.file_name)];
         if let Some(original) = &moved_from {
             journal.push(self.journal_before(&original.calendar_id, &original.file_name));
@@ -4122,9 +4135,9 @@ impl AppModel {
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
-        let result = match moved_from {
+        let result = match &moved_from {
             Some(original) => store
-                .move_to_calendar(&original, &event.calendar_id)
+                .move_to_calendar(original, &event.calendar_id)
                 .and_then(|_| store.save(&event)),
             None => store.save(&event),
         };
@@ -4132,6 +4145,16 @@ impl AppModel {
         match result {
             Ok(()) => {
                 queue_writeback_save(&event, base.as_deref());
+                // The old calendar's server still holds it; without this the
+                // next sync brings it back as a duplicate.
+                if let Some(original) = &moved_from {
+                    queue_writeback_removal(
+                        store,
+                        &original.calendar_id,
+                        &original.file_name,
+                        moved_base.as_deref(),
+                    );
+                }
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
@@ -4197,25 +4220,35 @@ impl AppModel {
         // A whole-series edit may also have moved the event to another
         // calendar, which means removing the old file as well.
         let base = writeback_base(store, &event.calendar_id, &event.file_name);
+        let moved = event.calendar_id != master.calendar_id;
+        let master_base = writeback_base(store, &master.calendar_id, &master.file_name);
         let mut journal = vec![self.journal_before(&event.calendar_id, &event.file_name)];
-        if event.calendar_id != master.calendar_id {
+        if moved {
             journal.push(self.journal_before(&master.calendar_id, &master.file_name));
         }
 
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
-        let result = if event.calendar_id == master.calendar_id {
-            store.save(&event)
-        } else {
+        let result = if moved {
             store
                 .move_to_calendar(&master, &event.calendar_id)
                 .and_then(|_| store.save(&event))
+        } else {
+            store.save(&event)
         };
 
         match result {
             Ok(()) => {
                 queue_writeback_save(&event, base.as_deref());
+                if moved {
+                    queue_writeback_removal(
+                        store,
+                        &master.calendar_id,
+                        &master.file_name,
+                        master_base.as_deref(),
+                    );
+                }
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
@@ -4362,8 +4395,16 @@ impl AppModel {
         match result {
             Ok(deleted_whole) => {
                 if deleted_whole {
-                    // The file is gone; tell the server so too.
-                    queue_writeback_delete(&master);
+                    // Gone locally; tell the server too — or, if the file
+                    // held other records, send what is left of it.
+                    if let Some(store) = self.store.as_ref() {
+                        queue_writeback_removal(
+                            store,
+                            &master.calendar_id,
+                            &master.file_name,
+                            base.as_deref(),
+                        );
+                    }
                 } else if let Ok(Some(after)) = self
                     .store
                     .as_ref()
@@ -4405,11 +4446,7 @@ impl AppModel {
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
-
-        // Queued BEFORE the local delete only for clarity — the coordinates
-        // live in the CalDAV sidecar, which the store never touches, so either
-        // order works.
-        queue_writeback_delete(&original);
+        let base = writeback_base(store, &original.calendar_id, &original.file_name);
 
         // Deleting an override removes just that component — the series and
         // its master stay, and the master's generated instance returns.
@@ -4422,6 +4459,16 @@ impl AppModel {
 
         match result {
             Ok(()) => {
+                // After the local change, and shaped by it: an override's
+                // removal leaves its series in the file, which must be sent
+                // as it now is — deleting the resource would delete the
+                // whole series on the server.
+                queue_writeback_removal(
+                    store,
+                    &original.calendar_id,
+                    &original.file_name,
+                    base.as_deref(),
+                );
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
@@ -4854,13 +4901,45 @@ fn own_wall_clock(t: crate::model::EventTime) -> NaiveDateTime {
     }
 }
 
-/// Queues a deleted event for removal on its CalDAV server, if it had one.
-fn queue_writeback_delete(event: &crate::model::Event) {
+/// What the server needs after a record left a file.
+#[derive(Debug, PartialEq, Eq)]
+enum Removal {
+    /// The file is gone: delete the resource.
+    Delete,
+    /// Other components still live in the file — a removed override leaves
+    /// its series, a removed task can leave its siblings — so the resource
+    /// is rewritten, not deleted.
+    Rewrite,
+}
+
+/// Which [`Removal`] a record's departure from `file` calls for, judged from
+/// what the local change left on disk.
+fn removal_after(file: &std::path::Path) -> Removal {
+    if file.exists() {
+        Removal::Rewrite
+    } else {
+        Removal::Delete
+    }
+}
+
+/// Queues what the server needs after a record left `file_name` in
+/// `calendar_id` — deleted, or moved to another calendar. `base` is the
+/// file's bytes before the change, for the writeback merge.
+fn queue_writeback_removal(store: &Store, calendar_id: &str, file_name: &str, base: Option<&str>) {
+    let Some(meta) = store.calendar(calendar_id) else {
+        return;
+    };
     let root = crate::store::vdir::default_root();
-    if let Err(why) = cosmic_pim_sync::queue_delete(&root, &event.calendar_id, &event.file_name) {
+    let queued = match removal_after(&meta.path.join(file_name)) {
+        Removal::Delete => cosmic_pim_sync::queue_delete(&root, calendar_id, file_name),
+        Removal::Rewrite => {
+            cosmic_pim_sync::queue_save_with_base(&root, calendar_id, file_name, base)
+        }
+    };
+    if let Err(why) = queued {
         tracing::warn!(
-            calendar = event.calendar_id, file = event.file_name, %why,
-            "could not queue the deletion for upload"
+            calendar = calendar_id, file = file_name, %why,
+            "could not queue the removal for upload"
         );
     }
 }
@@ -4885,17 +4964,6 @@ fn queue_writeback_task(todo: &crate::model::Todo, base: Option<&str>) {
         tracing::warn!(
             calendar = todo.calendar_id, file = todo.file_name, %why,
             "could not queue the task for upload"
-        );
-    }
-}
-
-/// Queues a deleted task for removal on its CalDAV server, if it had one.
-fn queue_writeback_task_delete(todo: &crate::model::Todo) {
-    let root = crate::store::vdir::default_root();
-    if let Err(why) = cosmic_pim_sync::queue_delete(&root, &todo.calendar_id, &todo.file_name) {
-        tracing::warn!(
-            calendar = todo.calendar_id, file = todo.file_name, %why,
-            "could not queue the task deletion for upload"
         );
     }
 }
@@ -5153,6 +5221,44 @@ mod tests {
             "an all-day DTEND equal to its DTSTART is not an event"
         );
         assert_eq!(series.exdates, vec![at(2026, 8, 11, 9, 0)]);
+    }
+
+    #[test]
+    fn deleting_one_changed_instance_rewrites_the_series_instead_of_deleting_it() {
+        use crate::model::EventTime;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(
+            &dir.path().join("calendars"),
+            &dir.path().join("index.sqlite"),
+        )
+        .unwrap();
+        let calendar = store.create_calendar("Work", PALETTE[0]).unwrap();
+        let local = store.local_timezone();
+
+        let mut series = crate::model::Event::draft(&calendar.id, at(2026, 8, 4, 9, 0), local);
+        series.summary = "Standup".into();
+        series.rrule = Some("FREQ=WEEKLY".into());
+        store.save(&series).unwrap();
+        // The 11 Aug instance, moved to 10:00: an override in the same file.
+        let mut moved = series.clone();
+        moved.rrule = None;
+        moved.recurrence_id = Some(EventTime::Zoned(at(2026, 8, 11, 9, 0), local));
+        moved.start = EventTime::Zoned(at(2026, 8, 11, 10, 0), local);
+        moved.end = EventTime::Zoned(at(2026, 8, 11, 11, 0), local);
+        store.save(&moved).unwrap();
+
+        store.delete_override(&moved).unwrap();
+        assert_eq!(
+            removal_after(&calendar.path.join(&series.file_name)),
+            Removal::Rewrite,
+            "a DELETE here would remove the whole series from the server"
+        );
+
+        store.delete(&calendar.id, &series.uid).unwrap();
+        assert_eq!(
+            removal_after(&calendar.path.join(&series.file_name)),
+            Removal::Delete
+        );
     }
 
     #[test]

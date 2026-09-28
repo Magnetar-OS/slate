@@ -427,6 +427,9 @@ pub enum Message {
     DialogCancelled,
     DialogFailed(String),
 
+    /// The user pressed Snooze on this reminder's notification.
+    ReminderSnoozed(crate::reminders::ReminderId),
+
     /// Whether another process (the daemon) is firing reminders for us —
     /// reported at start-up and again whenever that changes.
     ReminderOwnership(bool),
@@ -2473,6 +2476,15 @@ impl cosmic::Application for AppModel {
                 return self.fire_due_reminders();
             }
 
+            Message::ReminderSnoozed(id) => {
+                let until = self.clock_now() + crate::reminders::SNOOZE;
+                // Recorded in the shared memory, so whichever process owns
+                // reminders when the snooze is up shows it again.
+                if let Err(why) = self.reminders.snooze(id, until) {
+                    tracing::warn!(%why, "could not record the snooze");
+                }
+            }
+
             Message::ReminderOwnership(delegated) => {
                 let taking_over = self.daemon_running && !delegated;
                 self.daemon_running = delegated;
@@ -3015,9 +3027,17 @@ impl AppModel {
         Task::batch(due.into_iter().map(|reminder| {
             let body = reminder.body(&self.config);
             cosmic::task::future(async move {
-                crate::reminders::notify(&reminder, <Self as cosmic::Application>::APP_ID, body)
-                    .await;
-                Message::Ignore
+                let snoozed = crate::reminders::notify(
+                    &reminder,
+                    <Self as cosmic::Application>::APP_ID,
+                    body,
+                )
+                .await;
+                if snoozed {
+                    Message::ReminderSnoozed(reminder.id)
+                } else {
+                    Message::Ignore
+                }
             })
         }))
     }

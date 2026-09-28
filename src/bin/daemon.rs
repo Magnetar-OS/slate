@@ -25,7 +25,7 @@
 use slate::background;
 use slate::clock::{follow_timezone, now_in};
 use slate::config::Config;
-use slate::reminders::{self, Scheduler, SleepWindow};
+use slate::reminders::{self, ReminderId, Scheduler, SleepWindow};
 use slate::store::{Store, watcher};
 
 const APP_ID: &str = "com.magnetaros.Slate";
@@ -123,6 +123,8 @@ async fn main() -> std::process::ExitCode {
     let mut shutdown = signals();
     // A background pass reporting that something landed on disk.
     let (landed_tx, mut landed_rx) = tokio::sync::mpsc::channel::<()>(1);
+    // A reminder the user snoozed from its notification.
+    let (snooze_tx, mut snooze_rx) = tokio::sync::mpsc::unbounded_channel::<ReminderId>();
 
     loop {
         tokio::select! {
@@ -131,7 +133,7 @@ async fn main() -> std::process::ExitCode {
                 if let Err(why) = follow_timezone(&mut store) {
                     tracing::warn!(%why, "could not follow the timezone change");
                 }
-                sleep.swept(check(&mut store, &mut scheduler));
+                sleep.swept(check(&mut store, &mut scheduler, &snooze_tx));
             }
             Some(going_down) = sleep_rx.recv() => {
                 if going_down {
@@ -144,7 +146,13 @@ async fn main() -> std::process::ExitCode {
                     tracing::warn!(%why, "refresh after resume failed");
                 }
                 report_missed(&mut store, &mut scheduler, sleep.woke()).await;
-                sleep.swept(check(&mut store, &mut scheduler));
+                sleep.swept(check(&mut store, &mut scheduler, &snooze_tx));
+            }
+            Some(id) = snooze_rx.recv() => {
+                let until = now_in(store.local_timezone()) + reminders::SNOOZE;
+                if let Err(why) = scheduler.snooze(id, until) {
+                    tracing::warn!(%why, "could not record the snooze; it holds until a restart");
+                }
             }
             _ = sync_ticker.tick() => spawn_background_pass(&running, landed_tx.clone()),
             Some(()) = landed_rx.recv() => {
@@ -156,7 +164,7 @@ async fn main() -> std::process::ExitCode {
                 if let Err(why) = store.refresh() {
                     tracing::warn!(%why, "refresh after a file change failed");
                 }
-                sleep.swept(check(&mut store, &mut scheduler));
+                sleep.swept(check(&mut store, &mut scheduler, &snooze_tx));
             }
             () = &mut shutdown => {
                 tracing::info!("shutting down");
@@ -254,7 +262,11 @@ fn signals() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> 
 
 /// One pass: reload config, notify whatever is due. Returns the instant it
 /// looked — the start of the next sleep window.
-fn check(store: &mut Store, scheduler: &mut Scheduler) -> chrono::NaiveDateTime {
+fn check(
+    store: &mut Store,
+    scheduler: &mut Scheduler,
+    snoozes: &tokio::sync::mpsc::UnboundedSender<ReminderId>,
+) -> chrono::NaiveDateTime {
     // Re-read each pass so a settings change takes effect without a restart.
     let config = load_config();
     let now = now_in(store.local_timezone());
@@ -264,9 +276,14 @@ fn check(store: &mut Store, scheduler: &mut Scheduler) -> chrono::NaiveDateTime 
             for reminder in due {
                 tracing::info!(summary = %reminder.summary, "reminder due");
                 let body = reminder.body(&config);
-                // Spawned: a notification with a Join button stays with its
-                // button until the meeting ends, and the sweep must not wait.
-                tokio::spawn(async move { reminders::notify(&reminder, APP_ID, body).await });
+                // Spawned: a notification waits on its buttons until the
+                // event ends, and the sweep must not wait with it.
+                let snoozes = snoozes.clone();
+                tokio::spawn(async move {
+                    if reminders::notify(&reminder, APP_ID, body).await {
+                        let _ = snoozes.send(reminder.id);
+                    }
+                });
             }
         }
         Err(why) => tracing::warn!(%why, "could not load occurrences"),

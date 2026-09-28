@@ -312,6 +312,7 @@ availability-failed = Could not check availability: { $why }
 
 ## Meetings
 join-call = Join call
+snooze = Snooze 10 minutes
 
 ## History
 undo = Undo

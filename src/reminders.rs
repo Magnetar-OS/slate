@@ -17,7 +17,7 @@ use crate::model::Occurrence;
 use crate::store::Store;
 use chrono::{Duration, NaiveDateTime};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Identifies one alarm on one occurrence, so it fires exactly once.
@@ -51,6 +51,20 @@ pub struct Reminder {
 }
 
 impl Reminder {
+    fn new(id: ReminderId, occurrence: &Occurrence, now: NaiveDateTime) -> Self {
+        Self {
+            id,
+            summary: occurrence.summary.clone(),
+            location: occurrence.location.clone(),
+            start: occurrence.start,
+            end: occurrence.end,
+            all_day: occurrence.all_day,
+            lead: occurrence.start - now,
+            recurrence_id: occurrence.recurrence_id,
+            join: None,
+        }
+    }
+
     /// The notification body: when the event starts, and where.
     ///
     /// Lives here rather than in either caller because the app and the daemon
@@ -116,9 +130,21 @@ impl Reminder {
 #[derive(Default)]
 pub struct Scheduler {
     fired: HashSet<ReminderId>,
-    /// Where the fired set is shared with the other process, if anywhere.
+    /// Reminders the user snoozed, and when each is due again.
+    snoozed: HashMap<ReminderId, NaiveDateTime>,
+    /// Where the memory is shared with the other process, if anywhere.
     path: Option<PathBuf>,
 }
+
+/// The on-disk form of a [`Scheduler`]'s memory.
+#[derive(Default, Serialize, Deserialize)]
+struct Memory {
+    fired: Vec<ReminderId>,
+    snoozed: Vec<(ReminderId, NaiveDateTime)>,
+}
+
+/// How long Snooze puts a reminder off.
+pub const SNOOZE: Duration = Duration::minutes(10);
 
 /// How far past its trigger a reminder may still fire.
 ///
@@ -139,6 +165,7 @@ impl Scheduler {
     pub fn persistent(path: PathBuf) -> Self {
         let mut scheduler = Self {
             fired: HashSet::new(),
+            snoozed: HashMap::new(),
             path: Some(path),
         };
         scheduler.reload();
@@ -146,6 +173,12 @@ impl Scheduler {
     }
 
     /// Merges in whatever the other process recorded since the last look.
+    ///
+    /// Fired reminders are merged: the set only grows, until pruned by date.
+    /// Snoozes are taken from the file as they are, because a snooze that
+    /// came due is removed, and a merge would bring it back to fire again.
+    /// Every snooze is written out the moment it is made ([`Self::snooze`]),
+    /// so the file always holds this process's own.
     ///
     /// A missing or unreadable file is an empty memory: the worst case is one
     /// repeated notification, which is better than none.
@@ -156,8 +189,11 @@ impl Scheduler {
         let Ok(text) = std::fs::read_to_string(path) else {
             return;
         };
-        match serde_json::from_str::<Vec<ReminderId>>(&text) {
-            Ok(ids) => self.fired.extend(ids),
+        match serde_json::from_str::<Memory>(&text) {
+            Ok(memory) => {
+                self.fired.extend(memory.fired);
+                self.snoozed = memory.snoozed.into_iter().collect();
+            }
             Err(why) => {
                 tracing::warn!(%why, path = %path.display(), "ignoring an unreadable fired-reminder file");
             }
@@ -176,17 +212,26 @@ impl Scheduler {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut ids: Vec<&ReminderId> = self.fired.iter().collect();
-        // Stable output, so an unchanged set rewrites identical bytes.
-        ids.sort_by(|a, b| {
+        let order = |a: &ReminderId, b: &ReminderId| {
             (a.start, &a.calendar_id, &a.uid, a.offset_secs).cmp(&(
                 b.start,
                 &b.calendar_id,
                 &b.uid,
                 b.offset_secs,
             ))
-        });
-        let text = serde_json::to_string(&ids).map_err(std::io::Error::other)?;
+        };
+        // Stable output, so an unchanged memory rewrites identical bytes.
+        let mut memory = Memory {
+            fired: self.fired.iter().cloned().collect(),
+            snoozed: self
+                .snoozed
+                .iter()
+                .map(|(id, until)| (id.clone(), *until))
+                .collect(),
+        };
+        memory.fired.sort_by(order);
+        memory.snoozed.sort_by(|a, b| order(&a.0, &b.0));
+        let text = serde_json::to_string(&memory).map_err(std::io::Error::other)?;
         cosmic_pim_core::atomic::write(path, &text, None)
             .map(|_| ())
             .map_err(|why| std::io::Error::other(why.to_string()))
@@ -218,37 +263,57 @@ impl Scheduler {
 
             for alarm in alarms {
                 let trigger = occurrence.start + alarm;
-
-                if trigger > now || now - trigger > GRACE {
-                    continue;
-                }
-
-                let id = ReminderId {
+                let id = || ReminderId {
                     uid: occurrence.uid.clone(),
                     calendar_id: occurrence.calendar_id.clone(),
                     start: occurrence.start,
                     offset_secs: alarm.num_seconds(),
                 };
 
+                // A snoozed reminder comes back when its snooze is up — once,
+                // and not at all if the machine slept through that moment
+                // too (the same staleness rule as a trigger).
+                if !self.snoozed.is_empty()
+                    && let Some(until) = self.snoozed.get(&id()).copied()
+                {
+                    if until > now {
+                        continue;
+                    }
+                    let id = id();
+                    self.snoozed.remove(&id);
+                    if now - until <= GRACE {
+                        out.push(Reminder::new(id, occurrence, now));
+                    }
+                    continue;
+                }
+
+                if trigger > now || now - trigger > GRACE {
+                    continue;
+                }
+
+                let id = id();
                 if !self.fired.insert(id.clone()) {
                     continue;
                 }
 
-                out.push(Reminder {
-                    id,
-                    summary: occurrence.summary.clone(),
-                    location: occurrence.location.clone(),
-                    start: occurrence.start,
-                    end: occurrence.end,
-                    all_day: occurrence.all_day,
-                    lead: occurrence.start - now,
-                    recurrence_id: occurrence.recurrence_id,
-                    join: None,
-                });
+                out.push(Reminder::new(id, occurrence, now));
             }
         }
 
         out
+    }
+
+    /// Puts a shown reminder off until `until`, and records it for the other
+    /// process at once.
+    ///
+    /// # Errors
+    ///
+    /// When the memory cannot be written; the snooze still holds in this
+    /// process.
+    pub fn snooze(&mut self, id: ReminderId, until: NaiveDateTime) -> std::io::Result<()> {
+        self.reload();
+        self.snoozed.insert(id, until);
+        self.persist()
     }
 
     /// Remembers a reminder as already dealt with, without showing it.
@@ -264,6 +329,7 @@ impl Scheduler {
     /// grow for the lifetime of the process.
     pub fn forget_before(&mut self, cutoff: NaiveDateTime) {
         self.fired.retain(|id| id.start >= cutoff);
+        self.snoozed.retain(|id, _| id.start >= cutoff);
     }
 
     #[must_use]
@@ -683,8 +749,9 @@ pub async fn on_sleep(mut on_change: impl FnMut(bool)) {
     }
 }
 
-/// Sends one reminder to the desktop's notification service, and — when it
-/// carries a Join button — waits for that button.
+/// Sends one reminder to the desktop's notification service and waits for
+/// its buttons: Join, when it has a meeting link, and Snooze. Returns whether
+/// the user snoozed it; the caller records that with [`Scheduler::snooze`].
 ///
 /// Async deliberately. Showing a notification is a D-Bus round trip, and
 /// `notify-rust`'s blocking variant spins up its own runtime to do it — which
@@ -697,7 +764,7 @@ pub async fn on_sleep(mut on_change: impl FnMut(bool)) {
 ///
 /// Failure is logged, not surfaced: a missing notification daemon should not
 /// interrupt whatever the user is doing in the calendar.
-pub async fn notify(reminder: &Reminder, app_id: &str, body: String) {
+pub async fn notify(reminder: &Reminder, app_id: &str, body: String) -> bool {
     let mut notification = notify_rust::Notification::new();
     notification
         .appname(&fl!("app-title"))
@@ -715,34 +782,42 @@ pub async fn notify(reminder: &Reminder, app_id: &str, body: String) {
     if reminder.join.is_some() {
         notification.action("join", &fl!("join-call"));
     }
+    notification.action("snooze", &fl!("snooze"));
 
     let handle = match notification.show_async().await {
         Ok(handle) => handle,
         Err(why) => {
             tracing::warn!(%why, "could not deliver a reminder notification");
-            return;
+            return false;
         }
     };
     tracing::debug!(summary = %reminder.summary, "reminder delivered");
 
-    let Some(url) = reminder.join.clone() else {
-        return;
-    };
+    let mut snoozed = false;
     let pressed = tokio::time::timeout(
         reminder.joinable_for(),
         handle.wait_for_action_async(|response| {
-            if let notify_rust::NotificationResponse::Action(action) = response
-                && action == "join"
-                && let Err(why) = open::that_detached(&url)
-            {
-                tracing::warn!(%why, "could not open the meeting link");
+            let notify_rust::NotificationResponse::Action(action) = response else {
+                return;
+            };
+            match action.as_str() {
+                "snooze" => snoozed = true,
+                "join" => {
+                    if let Some(url) = &reminder.join
+                        && let Err(why) = open::that_detached(url)
+                    {
+                        tracing::warn!(%why, "could not open the meeting link");
+                    }
+                }
+                _ => {}
             }
         }),
     )
     .await;
     if pressed.is_err() {
-        tracing::debug!(summary = %reminder.summary, "the meeting is over; no longer offering to join");
+        tracing::debug!(summary = %reminder.summary, "the event is over; no longer waiting on its buttons");
     }
+    snoozed
 }
 
 #[cfg(test)]
@@ -1048,6 +1123,57 @@ mod tests {
             .due(&events, ten_minutes_before, at(8, 50), |_| None)
             .remove(0);
         assert_eq!(reminder.joinable_for(), std::time::Duration::from_mins(70));
+    }
+
+    #[test]
+    fn a_snoozed_reminder_comes_back_once() {
+        let mut scheduler = Scheduler::new();
+        let events = [occurrence("Standup", at(9, 0))];
+
+        let shown = scheduler
+            .due(&events, ten_minutes_before, at(8, 50), |_| None)
+            .remove(0);
+        scheduler.snooze(shown.id, at(8, 50) + SNOOZE).unwrap();
+
+        assert!(
+            scheduler
+                .due(&events, ten_minutes_before, at(8, 55), |_| None)
+                .is_empty(),
+            "came back before the snooze was up"
+        );
+        assert_eq!(
+            scheduler
+                .due(&events, ten_minutes_before, at(9, 0), |_| None)
+                .len(),
+            1
+        );
+        assert!(
+            scheduler
+                .due(&events, ten_minutes_before, at(9, 1), |_| None)
+                .is_empty(),
+            "a snooze fired twice"
+        );
+    }
+
+    #[test]
+    fn a_snooze_outlives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fired-reminders.json");
+        let events = [occurrence("Standup", at(9, 0))];
+
+        let mut before = Scheduler::persistent(path.clone());
+        let shown = before
+            .due(&events, ten_minutes_before, at(8, 50), |_| None)
+            .remove(0);
+        before.snooze(shown.id, at(9, 0)).unwrap();
+
+        let mut after = Scheduler::persistent(path);
+        assert_eq!(
+            after
+                .due(&events, ten_minutes_before, at(9, 0), |_| None)
+                .len(),
+            1
+        );
     }
 
     #[test]

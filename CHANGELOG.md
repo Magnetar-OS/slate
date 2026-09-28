@@ -10,6 +10,8 @@ All notable user-facing changes to Slate. The format follows
 - Rename, recolour and delete calendars kept on this computer, in Settings.
 - Reminders in the event editor: add them from presets, from the start of the
   event up to a week before, or remove them.
+- Snooze on reminder notifications: the reminder comes back ten minutes
+  later, even if the app or the daemon restarted in between.
 
 ### Changed
 

@@ -56,6 +56,8 @@ All notable user-facing changes to Slate. The format follows
   for the account) stays in the queue to retry, and the same invitation
   delivered twice is asked about once; a newer revision replaces the older
   one.
+- Declining an invitation you had accepted before removes it from the
+  calendar, instead of leaving it there marked accepted.
 
 ## [1.1.0] - 2026-09-22
 

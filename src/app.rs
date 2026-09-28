@@ -610,6 +610,22 @@ pub struct PendingInvitation {
     pub event: Option<crate::model::Event>,
 }
 
+/// Removes the copy an earlier accept stored of the invitation `ics`, now
+/// that the user declines it.
+///
+/// Applied as the organizer's own CANCEL of the same revision, so the tested
+/// iTIP paths decide what goes: the whole file for a series or one-off, one
+/// cancelled instance when the invitation names a RECURRENCE-ID. `NoMatch`
+/// means nothing was stored.
+fn withdraw_declined(
+    collection: &std::path::Path,
+    ics: &str,
+    me: &str,
+) -> cosmic_pim_caldav::Result<cosmic_pim_caldav::itip::Outcome> {
+    use cosmic_pim_caldav::itip;
+    itip::apply(collection, &itip::with_method(ics, "CANCEL"), me)
+}
+
 /// Adds a delivered invitation to the queue, once.
 ///
 /// Envelope delivers a REQUEST every time it sees the mail — a re-sync, a
@@ -3447,8 +3463,11 @@ impl AppModel {
     /// Accept and Tentative store the event (via `itip::apply`, which owns
     /// the attendee gate and the SEQUENCE rule) and record the PARTSTAT on
     /// the stored copy through the same tested path a mailed REPLY takes.
-    /// Decline stores nothing — a declined meeting on the grid is clutter,
-    /// and the organizer's next update re-delivers it if things change.
+    /// Decline keeps nothing — a declined meeting on the grid is clutter,
+    /// and the organizer's next update re-delivers it if things change. A
+    /// copy stored by an earlier accept is withdrawn ([`withdraw_declined`]),
+    /// so the calendar ends up the same whether or not the user said yes
+    /// first.
     /// Either way the reply goes to Envelope's outbox when Envelope is
     /// running, and degrades to "reply from your mail client" when not.
     fn answer_invitation(&mut self, answer: InviteAnswer) -> Task<cosmic::Action<Message>> {
@@ -3469,7 +3488,23 @@ impl AppModel {
         };
         let mut queued = Ok(());
 
-        if answer != InviteAnswer::Declined {
+        if answer == InviteAnswer::Declined {
+            match withdraw_declined(&meta.path, &invitation.ics, &me) {
+                Ok(itip::Outcome::Cancelled { file }) => {
+                    queued = queue_writeback_delete_file(&meta.id, &file);
+                }
+                Ok(itip::Outcome::InstanceCancelled { file }) => {
+                    queued = queue_writeback_file(&meta.id, &file, None);
+                }
+                Ok(itip::Outcome::Stale) => {
+                    self.invitations.remove(0);
+                    return self.toast_error(&fl!("invitation-stale"));
+                }
+                // Nothing was stored: nothing to withdraw.
+                Ok(_) => {}
+                Err(why) => return self.toast_error(&why.to_string()),
+            }
+        } else {
             match itip::apply(&meta.path, &invitation.ics, &me) {
                 // Neither can succeed on a retry; the invitation is done with.
                 Ok(itip::Outcome::Stale) => {
@@ -5318,6 +5353,36 @@ mod tests {
             event: None,
             ics,
         }
+    }
+
+    #[test]
+    fn declining_after_accepting_takes_the_meeting_off_the_calendar() {
+        use cosmic_pim_caldav::itip::{self, Outcome};
+        let collection = tempfile::tempdir().unwrap();
+        let review = invitation("review@x", 1, "Review");
+
+        // Accepted earlier: the event is stored.
+        let Outcome::Created { file } =
+            itip::apply(collection.path(), &review.ics, "me@example.com").unwrap()
+        else {
+            panic!("the invitation was not stored");
+        };
+
+        assert_eq!(
+            withdraw_declined(collection.path(), &review.ics, "me@example.com").unwrap(),
+            Outcome::Cancelled { file: file.clone() }
+        );
+        assert!(!collection.path().join(file).exists());
+    }
+
+    #[test]
+    fn declining_what_was_never_accepted_touches_nothing() {
+        let collection = tempfile::tempdir().unwrap();
+        let review = invitation("review@x", 1, "Review");
+        assert_eq!(
+            withdraw_declined(collection.path(), &review.ics, "me@example.com").unwrap(),
+            cosmic_pim_caldav::itip::Outcome::NoMatch
+        );
     }
 
     #[test]

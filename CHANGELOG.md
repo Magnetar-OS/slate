@@ -80,6 +80,8 @@ All notable user-facing changes to Slate. The format follows
   and location.
 - The secondary time zone column is right in a week where either zone changes
   to or from summer time.
+- Quick add gives an event without an end time its calendar's default length,
+  as the editor does, instead of always an hour.
 
 ## [1.1.0] - 2026-09-22
 

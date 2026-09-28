@@ -90,9 +90,11 @@ pub fn parse(input: &str, today: NaiveDate) -> Option<Parsed> {
 
 impl Parsed {
     /// Start and end as wall-clock datetimes; all-day maps to midnight and a
-    /// one-day span, matching what the editor stores.
+    /// one-day span, matching what the editor stores. A time without a range
+    /// lasts `length` — the calendar's default duration, as a new event from
+    /// the editor or the grid would.
     #[must_use]
-    pub fn span(&self) -> (NaiveDateTime, NaiveDateTime) {
+    pub fn span(&self, length: Duration) -> (NaiveDateTime, NaiveDateTime) {
         let Some(start) = self.start else {
             let begin = self.date.and_time(NaiveTime::MIN);
             return (begin, begin + Duration::days(1));
@@ -100,9 +102,8 @@ impl Parsed {
         let begin = self.date.and_time(start);
         let end = match self.end {
             Some(end) if end > start => self.date.and_time(end),
-            // A range wrapping midnight, or no range at all: an hour is the
-            // editor's own default.
-            _ => begin + Duration::hours(1),
+            // A range wrapping midnight, or no range at all.
+            _ => begin + length,
         };
         (begin, end)
     }
@@ -222,8 +223,15 @@ mod tests {
         let parsed = parse("workshop 13:00-14:30", today()).unwrap();
         assert_eq!(parsed.start, Some(t(13, 0)));
         assert_eq!(parsed.end, Some(t(14, 30)));
-        let (from, to) = parsed.span();
+        let (from, to) = parsed.span(Duration::hours(1));
         assert_eq!(to - from, Duration::minutes(90));
+    }
+
+    #[test]
+    fn a_bare_time_lasts_the_calendars_default() {
+        let parsed = parse("standup 9:30", today()).unwrap();
+        let (from, to) = parsed.span(Duration::minutes(15));
+        assert_eq!(to - from, Duration::minutes(15));
     }
 
     #[test]

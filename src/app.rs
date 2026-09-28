@@ -3756,9 +3756,16 @@ impl AppModel {
     fn quick_add_dialog<'a>(&'a self, input: &'a str) -> Element<'a, Message> {
         let parsed = crate::quickadd::parse(input, self.today);
 
+        let length = self
+            .store
+            .as_ref()
+            .and_then(Store::default_calendar)
+            .map_or(Duration::hours(1), |calendar| {
+                self.config.duration_for(&calendar.id)
+            });
         let preview = match &parsed {
             Some(parsed) => {
-                let (start, end) = parsed.span();
+                let (start, end) = parsed.span(length);
                 let mut line = format!(
                     "{} · {} {} {}",
                     parsed.summary,
@@ -3830,7 +3837,8 @@ impl AppModel {
         };
         let local = store.local_timezone();
 
-        let (start, end) = parsed.span();
+        // The calendar's own default length, as the editor and the grid use.
+        let (start, end) = parsed.span(self.config.duration_for(&calendar_id));
         let mut event = crate::model::Event::draft(&calendar_id, start, local);
         event.summary = parsed.summary.clone();
         event.location = parsed.location.clone();

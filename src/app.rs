@@ -576,6 +576,8 @@ pub struct SubscriptionForm {
 pub struct ConflictRow {
     pub collection: String,
     pub href: String,
+    /// Which two changes collided: two edits, or an edit against a deletion.
+    pub kind: cosmic_pim_caldav::ConflictKind,
     /// The local, unsent edit — "yours".
     pub yours: String,
     /// The server's current version — "theirs".
@@ -3603,20 +3605,26 @@ impl AppModel {
                 // With the base revision on record, the engine can say which
                 // units are actually in dispute; without it (or when the texts
                 // are not comparable) only the wholesale answers are honest.
-                let disputes = conflict.base.as_deref().and_then(|base| {
-                    cosmic_pim_core::merge::overlaps(base, &conflict.local, &conflict.remote).map(
-                        |units| Disputes {
-                            base: base.to_owned(),
-                            local: conflict.local.clone(),
-                            remote: conflict.remote.clone(),
-                            units,
-                            choices: std::collections::BTreeMap::new(),
-                        },
-                    )
-                });
+                // Per-unit choice only makes sense between two edits.
+                let both_edited = conflict.kind == cosmic_pim_caldav::ConflictKind::BothEdited;
+                let disputes = conflict
+                    .base
+                    .as_deref()
+                    .filter(|_| both_edited)
+                    .and_then(|base| {
+                        cosmic_pim_core::merge::overlaps(base, &conflict.local, &conflict.remote)
+                            .map(|units| Disputes {
+                                base: base.to_owned(),
+                                local: conflict.local.clone(),
+                                remote: conflict.remote.clone(),
+                                units,
+                                choices: std::collections::BTreeMap::new(),
+                            })
+                    });
                 ConflictRow {
                     yours: describe(&conflict.local),
                     theirs: describe(&conflict.remote),
+                    kind: conflict.kind,
                     collection,
                     href: conflict.href,
                     disputes,

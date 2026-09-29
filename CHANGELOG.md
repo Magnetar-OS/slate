@@ -99,6 +99,7 @@ All notable user-facing changes to Slate. The format follows
 - Deleting one instance of an accepted meeting, or everything from one instance on, no longer changes its revision number, so the organizer's later updates still apply.
 - Moving every event of a series to a new time takes its individually changed occurrences along, instead of leaving each one at the old time beside the moved series.
 - An invitation or cancellation that was not sent by the meeting's organizer is refused with a message, instead of being added to the calendar or cancelling a meeting.
+- A sync conflict between an edit and a deletion says which side deleted the event, and its two buttons say what they will do (put it back, or delete it too), instead of offering "Keep mine / Take server's" for an event one side no longer has.
 
 ## [1.1.0] - 2026-09-22
 

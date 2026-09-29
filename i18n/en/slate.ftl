@@ -274,10 +274,16 @@ remove-account-body = “{ $name }” will be removed from every Magnetar app th
 
 ## Sync conflicts
 conflicts = Conflicts
-conflicts-description = These events changed both here and on the server. Pick which version to keep — nothing resolves itself with time.
+conflicts-description = These events changed both here and on the server, or were changed on one side and deleted on the other. Pick which to keep — nothing resolves itself with time.
 conflict-versions = Yours: { $yours } · Server's: { $theirs }
 conflict-keep-mine = Keep mine
 conflict-take-theirs = Take server's
+conflict-deleted-on-server = “{ $summary }” was deleted on the server, but you changed it here.
+conflict-restore-on-server = Keep mine (put it back on the server)
+conflict-delete-here = Delete it here too
+conflict-deleted-here = You deleted “{ $summary }” here, but it changed on the server.
+conflict-delete-on-server = Delete it on the server too
+conflict-restore-here = Keep the server's version
 conflict-merges-cleanly = Your edit and the server's touch different fields
 conflict-merge-both = Merge both
 conflict-choose-description = Both sides changed the fields below. Pick which version of each to keep; every other field keeps both edits.

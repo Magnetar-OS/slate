@@ -210,30 +210,63 @@ fn conflicts_section(conflicts: &[ConflictRow]) -> Element<'_, Message> {
     column.into()
 }
 
+/// How one conflict is put to the user: what collided, and what each of the
+/// two answers does — which differs by kind. "Keep mine" against a server
+/// deletion puts the event back on the server; against a local deletion it
+/// deletes it there.
+struct ConflictWording {
+    what: String,
+    keep_mine: String,
+    take_theirs: String,
+}
+
+fn conflict_wording(row: &ConflictRow) -> ConflictWording {
+    use cosmic_pim_caldav::ConflictKind;
+    match row.kind {
+        ConflictKind::BothEdited => ConflictWording {
+            what: fl!(
+                "conflict-versions",
+                yours = row.yours.clone(),
+                theirs = row.theirs.clone()
+            ),
+            keep_mine: fl!("conflict-keep-mine"),
+            take_theirs: fl!("conflict-take-theirs"),
+        },
+        // The server's side is a deletion, so only ours has a summary.
+        ConflictKind::DeletedOnServer => ConflictWording {
+            what: fl!("conflict-deleted-on-server", summary = row.yours.clone()),
+            keep_mine: fl!("conflict-restore-on-server"),
+            take_theirs: fl!("conflict-delete-here"),
+        },
+        ConflictKind::DeletedHere => ConflictWording {
+            what: fl!("conflict-deleted-here", summary = row.theirs.clone()),
+            keep_mine: fl!("conflict-delete-on-server"),
+            take_theirs: fl!("conflict-restore-here"),
+        },
+    }
+}
+
 /// One conflict: the wholesale answers, plus per-unit choices when the sync
 /// pass kept the revision both sides diverged from.
 fn conflict_card(index: usize, row: &ConflictRow) -> Element<'_, Message> {
     let spacing = cosmic::theme::spacing();
 
+    let wording = conflict_wording(row);
     let mut section = widget::settings::section().add(
-        widget::settings::item::builder(fl!(
-            "conflict-versions",
-            yours = row.yours.clone(),
-            theirs = row.theirs.clone()
-        ))
-        .description(row.collection.clone())
-        .control(
-            widget::row::with_capacity(2)
-                .spacing(spacing.space_xxs)
-                .push(
-                    widget::button::text(fl!("conflict-keep-mine"))
-                        .on_press(Message::ConflictKeepLocal(index)),
-                )
-                .push(
-                    widget::button::text(fl!("conflict-take-theirs"))
-                        .on_press(Message::ConflictTakeRemote(index)),
-                ),
-        ),
+        widget::settings::item::builder(wording.what)
+            .description(row.collection.clone())
+            .control(
+                widget::row::with_capacity(2)
+                    .spacing(spacing.space_xxs)
+                    .push(
+                        widget::button::text(wording.keep_mine)
+                            .on_press(Message::ConflictKeepLocal(index)),
+                    )
+                    .push(
+                        widget::button::text(wording.take_theirs)
+                            .on_press(Message::ConflictTakeRemote(index)),
+                    ),
+            ),
     );
 
     let Some(disputes) = &row.disputes else {
@@ -407,4 +440,43 @@ fn add_form(form: &AccountForm) -> Element<'_, Message> {
                 }),
         )
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cosmic_pim_caldav::ConflictKind;
+
+    fn row(kind: ConflictKind) -> ConflictRow {
+        ConflictRow {
+            collection: "work".into(),
+            href: "/cal/review.ics".into(),
+            kind,
+            yours: "Review".into(),
+            theirs: "Review, moved".into(),
+            disputes: None,
+        }
+    }
+
+    #[test]
+    fn each_kind_of_conflict_says_what_its_answers_do() {
+        let plain = |s: String| s.replace(['\u{2068}', '\u{2069}'], "");
+
+        let edited = conflict_wording(&row(ConflictKind::BothEdited));
+        assert_eq!(plain(edited.keep_mine), "Keep mine");
+
+        let gone_there = conflict_wording(&row(ConflictKind::DeletedOnServer));
+        assert_eq!(
+            plain(gone_there.what),
+            "“Review” was deleted on the server, but you changed it here."
+        );
+        assert_eq!(plain(gone_there.take_theirs), "Delete it here too");
+
+        let gone_here = conflict_wording(&row(ConflictKind::DeletedHere));
+        assert_eq!(
+            plain(gone_here.what),
+            "You deleted “Review, moved” here, but it changed on the server."
+        );
+        assert_eq!(plain(gone_here.keep_mine), "Delete it on the server too");
+    }
 }

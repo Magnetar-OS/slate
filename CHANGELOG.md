@@ -15,6 +15,7 @@ All notable user-facing changes to Slate. The format follows
 
 ### Changed
 
+- Rebuilt against the current COSMIC libraries (libcosmic `03d7dcb`).
 - Built against cosmic-ext-widgets 1.0.1: the nav rail no longer widens to the full row, and a sidebar created hidden slides in the first time it is shown.
 - The invitation dialog shows its date as the rest of the app does ("Tue 4
   August 09:00") rather than as an ISO date.

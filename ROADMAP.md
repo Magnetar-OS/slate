@@ -69,10 +69,10 @@ inexpressible RRULEs is exactly what overrides need.
       only properties it understands, the patcher preserves the rest.
 - [x] *This and following*: truncate master with `UNTIL`, emit successor series, re-home
       overrides after the split, single atomic write.
-- [ ] *All events*: edit master, keep overrides valid, drop/remap orphans only with explicit
-      confirmation. Exclusions (`EXDATE`) now move with the series and the all-day switch
-      applies; overrides still keep their old `RECURRENCE-ID` after a time shift, which needs
-      a substrate operation to enumerate and rewrite them (audit 2026-09-28, F-03).
+- [x] *All events*: edit master, keep overrides valid. Exclusions (`EXDATE`) move with the
+      series, the all-day switch applies, and every override's `RECURRENCE-ID` moves with it
+      (cosmic-pim 2 `Store::save_series`), so no orphan is ever produced and none needs a
+      confirmation to drop (audit 2026-09-28, F-02, F-03).
 - [x] Delete gains the same three scopes (`EXDATE` / truncate / remove file).
 - [x] Undo journal groundwork â€” landed as whole-file before/after snapshots rather than
       patcher inverses: every mutation is already an atomic rewrite of one or two files and
@@ -261,8 +261,7 @@ Scoreboard against the parity floor (GNOME Calendar) plus the differentiators. â
 
 **Where it stands:** every row the parity floor has is now green, and Slate is ahead of it on
 conflict resolution, undo, quick-add, secondary time zones, birthdays, tasks, the applet, and
-vdir interop. What remains is organizer send-side (M7+), override remapping on all-events edits
-(M1, substrate), and the 1.0 work in M8.
+vdir interop. What remains is organizer send-side (M7+) and the 1.0 work in M8.
 
 ## Non-goals
 

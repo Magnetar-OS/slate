@@ -246,11 +246,7 @@ verification debts and one blocked feature are still loss-shaped:
    by Thunderbird, khal, and Evolution must display correctly (Slate M0).
    Showing a moved occurrence at its original time is data loss in the
    user's eyes, whatever the bytes say.
-3. **Overrides are not remapped on an all-events time shift.** Moving
-   every instance keeps each override's old `RECURRENCE-ID`, so it shows
-   beside the regenerated instance. Needs a substrate operation
-   (audit 2026-09-28, F-03).
-4. **Windows-timezone mapping is absent.** An Outlook-authored event whose
+3. **Windows-timezone mapping is absent.** An Outlook-authored event whose
    `TZID` fails IANA lookup falls back to floating and displays at the
    wrong wall-clock time. Substrate work (cosmic-pim M1); trust-loss if
    not byte-loss.

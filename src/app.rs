@@ -4707,13 +4707,7 @@ impl AppModel {
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
-        let result = if moved {
-            store
-                .move_to_calendar(&master, &event.calendar_id)
-                .and_then(|_| store.save(&event))
-        } else {
-            store.save(&event)
-        };
+        let result = write_series_edit(store, &master, &event, matches!(scope, EditScope::All));
 
         match result {
             Ok(()) => {
@@ -5409,6 +5403,32 @@ fn whole_series_edit(
     series
 }
 
+/// Writes a scoped edit of `master`'s series: `event` is the new master when
+/// `whole`, one override otherwise. A calendar change moves the series first.
+///
+/// A whole-series save goes through `Store::save_series`, which moves each
+/// override's `RECURRENCE-ID` with the series. Saving the master alone left
+/// every override naming an instance the series no longer generates: it
+/// showed beside the regenerated one and could not be reached as "this
+/// event" (audit F-03).
+fn write_series_edit(
+    store: &mut Store,
+    master: &crate::model::Event,
+    event: &crate::model::Event,
+    whole: bool,
+) -> Result<(), crate::store::StoreError> {
+    let previous = if event.calendar_id == master.calendar_id {
+        master.clone()
+    } else {
+        store.move_to_calendar(master, &event.calendar_id)?
+    };
+    if whole {
+        store.save_series(&previous, event)
+    } else {
+        store.save(event)
+    }
+}
+
 /// A time's value in its own frame — the space `EXDATE`s are written in.
 fn own_wall_clock(t: crate::model::EventTime) -> NaiveDateTime {
     use crate::model::EventTime;
@@ -5678,6 +5698,60 @@ mod tests {
             series.exdates,
             vec![at(2026, 8, 11, 10, 0)],
             "the exclusion no longer matches the instance it deleted"
+        );
+    }
+
+    #[test]
+    fn moving_every_instance_takes_the_changed_ones_along() {
+        use crate::model::EventTime;
+        use chrono::TimeZone;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(
+            &dir.path().join("calendars"),
+            &dir.path().join("index.sqlite"),
+        )
+        .unwrap();
+        let calendar = store.create_calendar("Work", PALETTE[0]).unwrap();
+        let local = store.local_timezone();
+
+        // Weekly at 09:00 from Tue 4 Aug; the 11 Aug instance renamed.
+        let mut master = crate::model::Event::draft(&calendar.id, at(2026, 8, 4, 9, 0), local);
+        master.summary = "Standup".into();
+        master.rrule = Some("FREQ=WEEKLY".into());
+        store.save(&master).unwrap();
+        let mut renamed = master.clone();
+        renamed.rrule = None;
+        renamed.summary = "Standup (demo)".into();
+        renamed.recurrence_id = Some(EventTime::Zoned(at(2026, 8, 11, 9, 0), local));
+        renamed.start = EventTime::Zoned(at(2026, 8, 11, 9, 0), local);
+        renamed.end = EventTime::Zoned(at(2026, 8, 11, 10, 0), local);
+        store.save(&renamed).unwrap();
+        let master = store.event(&calendar.id, &master.uid).unwrap().unwrap();
+
+        // Every instance moves to 10:00, edited from the 18 Aug one.
+        let mut edited = master.clone();
+        edited.start = EventTime::Zoned(at(2026, 8, 18, 10, 0), local);
+        edited.end = EventTime::Zoned(at(2026, 8, 18, 11, 0), local);
+        let clicked = local
+            .from_local_datetime(&at(2026, 8, 18, 9, 0))
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let series = whole_series_edit(&master, edited, clicked, local);
+        write_series_edit(&mut store, &master, &series, true).unwrap();
+
+        let tuesday = store
+            .occurrences(
+                day(2026, 8, 11),
+                day(2026, 8, 12),
+                &std::collections::HashSet::new(),
+            )
+            .unwrap();
+        let shown: Vec<(String, NaiveDateTime)> =
+            tuesday.into_iter().map(|o| (o.summary, o.start)).collect();
+        assert_eq!(
+            shown,
+            vec![("Standup (demo)".to_owned(), at(2026, 8, 11, 10, 0))],
+            "the changed instance must move with the series, not show beside it"
         );
     }
 

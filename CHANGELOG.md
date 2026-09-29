@@ -97,6 +97,7 @@ All notable user-facing changes to Slate. The format follows
 - A repeating event that "ends on" a date ends on that day in its own time zone; the end was measured in UTC, so series could run a day long or stop a day early, and an all-day series got an invalid end.
 - An all-day event on the day the clocks go back no longer spills into the next day.
 - Deleting one instance of an accepted meeting, or everything from one instance on, no longer changes its revision number, so the organizer's later updates still apply.
+- Moving every event of a series to a new time takes its individually changed occurrences along, instead of leaving each one at the old time beside the moved series.
 
 ## [1.1.0] - 2026-09-22
 

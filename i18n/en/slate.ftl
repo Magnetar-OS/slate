@@ -177,6 +177,31 @@ sync-now = Sync now
 syncing = Syncing…
 # The reminder daemon runs sync while it is up; this is its failure to.
 sync-daemon-failed = The background service could not sync: { $reason }
+# One account's sync pass, joined with " · " after the account's name.
+sync-account-failed = { $account }: could not sync — { $reason }
+sync-up-to-date = up to date
+sync-fetched = { $count } { $count ->
+        [one] change
+       *[other] changes
+    } from the server
+sync-deleted = { $count } removed on the server
+sync-pushed = { $count } { $count ->
+        [one] change
+       *[other] changes
+    } sent
+sync-conflicts = { $count } { $count ->
+        [one] conflict
+       *[other] conflicts
+    } to resolve
+sync-held = { $count } { $count ->
+        [one] change
+       *[other] changes
+    } waiting for you (a password, or write access)
+sync-failed = { $count } { $count ->
+        [one] calendar
+       *[other] calendars
+    } failed
+sync-contacts-unavailable = address books unavailable: { $reason }
 # A change was saved locally, but its upload to the server could not be queued.
 error-not-queued = Saved on this computer, but it could not be queued for upload to the server: { $reason }
 error-no-account-store = Account storage is unavailable, so accounts cannot be saved.

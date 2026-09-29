@@ -655,7 +655,8 @@ fn withdraw_declined(
     me: &str,
 ) -> cosmic_pim_caldav::Result<cosmic_pim_caldav::itip::Outcome> {
     use cosmic_pim_caldav::itip;
-    itip::apply(collection, &itip::with_method(ics, "CANCEL"), me)
+    // The user's own decision, not a mail: there is no sender to check.
+    itip::apply(collection, &itip::with_method(ics, "CANCEL"), me, None)
 }
 
 /// The calendar the export dialog starts on: the first one shown in the
@@ -3862,7 +3863,7 @@ impl AppModel {
                 Err(why) => return self.toast_error(&why.to_string()),
             }
         } else {
-            match itip::apply(&meta.path, &invitation.ics, &me) {
+            match itip::apply(&meta.path, &invitation.ics, &me, None) {
                 // Neither can succeed on a retry; the invitation is done with.
                 Ok(itip::Outcome::Stale) => {
                     self.invitations.remove(0);
@@ -3908,7 +3909,7 @@ impl AppModel {
         );
 
         if answer != InviteAnswer::Declined {
-            match itip::apply(&meta.path, &reply_ics, &me) {
+            match itip::apply(&meta.path, &reply_ics, &me, None) {
                 Ok(outcome) => {
                     if let Some(file) = outcome.file() {
                         queued = queue_writeback_file(&meta.id, file, None);
@@ -3952,7 +3953,7 @@ impl AppModel {
         let me = self
             .account_address(&delivery.account_id)
             .unwrap_or_default();
-        match cosmic_pim_caldav::itip::apply(&meta.path, &delivery.ics, &me) {
+        match cosmic_pim_caldav::itip::apply(&meta.path, &delivery.ics, &me, None) {
             Ok(outcome) => {
                 let queued = match &outcome {
                     // A whole-series CANCEL removed the file; the deletion
@@ -5783,7 +5784,7 @@ mod tests {
 
         // Accepted earlier: the event is stored.
         let Outcome::Created { file } =
-            itip::apply(collection.path(), &review.ics, "me@example.com").unwrap()
+            itip::apply(collection.path(), &review.ics, "me@example.com", None).unwrap()
         else {
             panic!("the invitation was not stored");
         };

@@ -20,6 +20,8 @@ All notable user-facing changes to Slate. The format follows
   August 09:00") rather than as an ISO date.
 - Removing an account asks first: it removes the account from every Magnetar
   app and forgets its password.
+- Built against cosmic-pim 2 (without its mail stack, which Slate does not use): sync state is now written under a lock shared by every process, so a sync pass can no longer lose a change queued by the app or another suite app.
+- Sync results are worded in the interface language, and say when an account's address books could not be reached instead of reporting the account as up to date.
 
 ### Fixed
 
@@ -92,6 +94,9 @@ All notable user-facing changes to Slate. The format follows
 - Quick add gives an event without an end time its calendar's default length,
   as the editor does, instead of always an hour.
 - Events imported into a synced calendar are uploaded to its server.
+- A repeating event that "ends on" a date ends on that day in its own time zone; the end was measured in UTC, so series could run a day long or stop a day early, and an all-day series got an invalid end.
+- An all-day event on the day the clocks go back no longer spills into the next day.
+- Deleting one instance of an accepted meeting, or everything from one instance on, no longer changes its revision number, so the organizer's later updates still apply.
 
 ## [1.1.0] - 2026-09-22
 

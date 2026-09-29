@@ -3,23 +3,21 @@
 //! The background work — CalDAV/CardDAV sync and ICS feed refreshes — and the
 //! bus interface that keeps it in one process at a time.
 //!
-//! Sync reads and rewrites each collection's `.caldav-state.json` whole. Two
-//! passes running at once — the daemon's five-minute tick and the app's
-//! "Sync now" — each load the sidecar, spend seconds on the network, and save
-//! their own copy last, so one pass's etags, conflicts and queue entries are
-//! lost to the other's. The queue is the only road a local edit has to the
-//! server; an entry lost there never arrives.
+//! Sync reads and rewrites each collection's `.caldav-state.json`. Since
+//! cosmic-pim 2 every change to it happens under a cross-process lock over a
+//! fresh read, so an edit the app queues while a pass runs is no longer lost
+//! to the pass's older copy. Two passes at once would still push the same
+//! queue twice and race each other's pulls, so passes stay one at a time.
 //!
-//! So sync has one owner, the same one reminders have: whoever holds
+//! Sync has one owner, the same one reminders have: whoever holds
 //! [`OWNER_BUS_NAME`](crate::reminders::OWNER_BUS_NAME). The daemon holds it and serves [`Service`] on it,
 //! which runs one pass at a time. The app, while the name is held, asks the
 //! daemon over [`BackgroundProxy`] instead of running its own pass, and runs
 //! [`sync_accounts`] itself only when no daemon is there to ask.
 //!
-//! This orders *passes*. An individual edit still writes its queue entry into
-//! the sidecar from the app while a daemon pass may hold an older copy; making
-//! that read-modify-write safe needs a lock in the substrate's sidecar store,
-//! which is where it belongs.
+//! One window remains, and it is the substrate's to close: a save writes the
+//! event file and then queues it, and a pass that runs between the two sees
+//! a changed file with nothing queued for it.
 
 /// Where the daemon serves [`Service`].
 pub const OBJECT_PATH: &str = "/com/magnetaros/Slate/Background";
@@ -57,16 +55,61 @@ pub fn sync_accounts() -> SyncReport {
     let mut lines = Vec::with_capacity(reports.len());
     let mut changed = false;
     for report in &reports {
-        let line = report.summary();
-        if report.collections.is_ok() {
-            tracing::info!("{line}");
-        } else {
+        let tally = report.tally();
+        let line = tally_line(&report.display_name, &tally);
+        if tally.has_problems() {
             tracing::warn!("{line}");
+        } else {
+            tracing::info!("{line}");
         }
         lines.push(line);
         changed |= report.changed();
     }
     (lines, changed)
+}
+
+/// One account's sync pass, as the user reads it: the account's name, what
+/// moved, and anything that needs them.
+#[must_use]
+pub fn tally_line(account: &str, tally: &cosmic_pim_sync::SyncTally) -> String {
+    let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+    if let Some(why) = &tally.account_error {
+        return crate::fl!(
+            "sync-account-failed",
+            account = account,
+            reason = why.clone()
+        );
+    }
+
+    let mut parts = Vec::new();
+    if tally.is_quiet() {
+        parts.push(crate::fl!("sync-up-to-date"));
+    }
+    if tally.fetched > 0 {
+        parts.push(crate::fl!("sync-fetched", count = count(tally.fetched)));
+    }
+    if tally.deleted > 0 {
+        parts.push(crate::fl!("sync-deleted", count = count(tally.deleted)));
+    }
+    if tally.pushed > 0 {
+        parts.push(crate::fl!("sync-pushed", count = count(tally.pushed)));
+    }
+    if tally.conflicts > 0 {
+        parts.push(crate::fl!("sync-conflicts", count = count(tally.conflicts)));
+    }
+    if tally.held > 0 {
+        parts.push(crate::fl!("sync-held", count = count(tally.held)));
+    }
+    if tally.failed > 0 {
+        parts.push(crate::fl!("sync-failed", count = count(tally.failed)));
+    }
+    if let Some(why) = &tally.contacts_unavailable {
+        parts.push(crate::fl!(
+            "sync-contacts-unavailable",
+            reason = why.clone()
+        ));
+    }
+    format!("{account}: {}", parts.join(" · "))
 }
 
 /// Refreshes the ICS feed subscriptions that are due — or all of them when
@@ -280,5 +323,46 @@ mod tests {
 
         drop(timer_pass);
         assert_eq!(proxy.sync().await.unwrap(), one_account_synced());
+    }
+
+    #[test]
+    fn a_sync_pass_is_worded_for_the_user() {
+        use cosmic_pim_sync::SyncTally;
+        // Fluent wraps each argument in bidi isolation marks.
+        let tally_line = |account: &str, tally: &SyncTally| {
+            tally_line(account, tally).replace(['\u{2068}', '\u{2069}'], "")
+        };
+
+        assert_eq!(
+            tally_line("Fastmail", &SyncTally::default()),
+            "Fastmail: up to date"
+        );
+        let busy = SyncTally {
+            fetched: 3,
+            pushed: 1,
+            conflicts: 1,
+            ..SyncTally::default()
+        };
+        assert_eq!(
+            tally_line("Fastmail", &busy),
+            "Fastmail: 3 changes from the server · 1 change sent · 1 conflict to resolve"
+        );
+        let refused = SyncTally {
+            contacts_unavailable: Some("403".into()),
+            ..SyncTally::default()
+        };
+        assert_eq!(
+            tally_line("Work", &refused),
+            "Work: address books unavailable: 403",
+            "a refused address book must not read as up to date"
+        );
+        let down = SyncTally {
+            account_error: Some("host unreachable".into()),
+            ..SyncTally::default()
+        };
+        assert_eq!(
+            tally_line("Work", &down),
+            "Work: could not sync — host unreachable"
+        );
     }
 }

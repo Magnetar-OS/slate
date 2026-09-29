@@ -408,11 +408,13 @@ impl Editor {
             && original.recurrence() == Some(recurrence)
         {
             // Nor one the user left as it was. Parsing is lossy — `UNTIL`
-            // keeps only its UTC date, `WKST` is dropped — so re-rendering an
-            // untouched rule can move where the series ends.
+            // keeps only its date, `WKST` is dropped — so re-rendering an
+            // untouched rule rewrites bytes another client chose.
             original.rrule.clone()
         } else {
-            recurrence.to_rrule()
+            // `UNTIL` is written in the series' own terms, so it needs the
+            // start the series is saved with.
+            recurrence.to_rrule(start)
         };
 
         let mut event = match &self.original {

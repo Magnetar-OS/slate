@@ -1947,7 +1947,7 @@ impl cosmic::Application for AppModel {
                         // or one this account organizes itself, is not an
                         // invitation to answer. Refused here rather than after
                         // the user has answered it.
-                        self.reopen_accounts();
+                        self.reload_accounts();
                         if let Some(me) = self.account_address(&delivery.account_id)
                             && !parsed.is_from_organizer(&me, None)
                         {
@@ -2030,7 +2030,6 @@ impl cosmic::Application for AppModel {
                 let Some(id) = self.pending_account_removal.take() else {
                     return Task::none();
                 };
-                self.reopen_accounts();
                 if let Some(accounts) = self.accounts.as_mut()
                     && let Err(why) = accounts.remove(&id)
                 {
@@ -2043,7 +2042,7 @@ impl cosmic::Application for AppModel {
             Message::SyncFinished(lines, changed) => {
                 self.syncing = false;
                 // The pass may have bound new collections to accounts.
-                self.reopen_accounts();
+                self.reload_accounts();
                 self.sync_status = Some(lines.join("\n"));
                 if changed {
                     // Sync wrote `.ics` files directly; the index has to catch up.
@@ -3359,27 +3358,27 @@ impl AppModel {
         }
     }
 
-    /// Validates the add-account form and stores the account.
-    /// Rereads the suite's shared account list.
+    /// Rereads the suite's shared account list, before reading bindings or
+    /// addresses from it.
     ///
     /// Other processes write it — the sync engine records which collections
     /// belong to which account, Envelope and Circle add and remove accounts —
-    /// so a copy loaded at start-up goes stale. Saving from a stale copy puts
-    /// its old bindings back over the ones sync wrote, so every change here
-    /// starts from the file as it is now.
-    fn reopen_accounts(&mut self) {
-        match cosmic_pim_accounts::AccountStore::open_default() {
-            Ok(accounts) => self.accounts = Some(accounts),
+    /// so a copy loaded at start-up goes stale. Changes made through the
+    /// handle reread on their own (cosmic-pim 2), so only reads need this.
+    fn reload_accounts(&mut self) {
+        if let Some(accounts) = self.accounts.as_mut()
+            && let Err(why) = accounts.reload()
+        {
             // The copy we have is still better than none.
-            Err(why) => tracing::warn!(%why, "cannot reread the account store"),
+            tracing::warn!(%why, "cannot reread the account store");
         }
     }
 
+    /// Validates the add-account form and stores the account.
     fn confirm_account(&mut self) -> Task<cosmic::Action<Message>> {
         let Some(form) = self.account_form.clone() else {
             return Task::none();
         };
-        self.reopen_accounts();
         let Some(accounts) = self.accounts.as_mut() else {
             return self.toast_error(&fl!("error-no-account-store"));
         };
@@ -3869,7 +3868,7 @@ impl AppModel {
         };
         // Routing reads the accounts' collection bindings, which sync keeps
         // current in the shared file, not in our copy.
-        self.reopen_accounts();
+        self.reload_accounts();
 
         let Some(meta) = self.invitation_collection(&invitation.account_id) else {
             return self.toast_error(&fl!("no-writable-calendar"));
@@ -3983,7 +3982,7 @@ impl AppModel {
     ) -> Task<cosmic::Action<Message>> {
         use cosmic_pim_caldav::itip::Outcome;
 
-        self.reopen_accounts();
+        self.reload_accounts();
         let Some(meta) = self.invitation_collection(&delivery.account_id) else {
             return Task::none();
         };

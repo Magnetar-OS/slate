@@ -680,6 +680,21 @@ fn matches_search(needle: &str, occurrence: &Occurrence, description: Option<&st
         || description.is_some_and(contains)
 }
 
+/// What the user is told about a CANCEL or REPLY applied without asking:
+/// `Ok` for news, `Err` for a payload refused, `None` for nothing to say.
+fn quiet_notice(outcome: &cosmic_pim_caldav::itip::Outcome) -> Option<Result<String, String>> {
+    use cosmic_pim_caldav::itip::Outcome;
+    match outcome {
+        Outcome::Cancelled { .. } | Outcome::InstanceCancelled { .. } => {
+            Some(Ok(fl!("invitation-cancelled")))
+        }
+        // Someone other than the organizer tried to cancel a meeting on
+        // this calendar. Ignored by the substrate; worth knowing about.
+        Outcome::NotFromOrganizer => Some(Err(fl!("invitation-cancel-not-from-organizer"))),
+        _ => None,
+    }
+}
+
 /// Adds a delivered invitation to the queue, once.
 ///
 /// Envelope delivers a REQUEST every time it sees the mail — a re-sync, a
@@ -1926,6 +1941,16 @@ impl cosmic::Application for AppModel {
                 };
                 match parsed.method {
                     Method::Request => {
+                        // Only the organizer may invite: a REQUEST without one,
+                        // or one this account organizes itself, is not an
+                        // invitation to answer. Refused here rather than after
+                        // the user has answered it.
+                        self.reopen_accounts();
+                        if let Some(me) = self.account_address(&delivery.account_id)
+                            && !parsed.is_from_organizer(&me, None)
+                        {
+                            return self.toast_error(&fl!("invitation-not-from-organizer"));
+                        }
                         let event = crate::store::vdir::parse_ics(&delivery.ics, "", "")
                             .into_iter()
                             .next();
@@ -3873,6 +3898,10 @@ impl AppModel {
                     self.invitations.remove(0);
                     return self.toast_error(&fl!("invitation-not-for-me"));
                 }
+                Ok(itip::Outcome::NotFromOrganizer) => {
+                    self.invitations.remove(0);
+                    return self.toast_error(&fl!("invitation-not-from-organizer"));
+                }
                 Ok(outcome) => {
                     if let Some(file) = outcome.file() {
                         queued = queue_writeback_file(&meta.id, file, None);
@@ -3963,16 +3992,13 @@ impl AppModel {
                         .file()
                         .map_or(Ok(()), |file| queue_writeback_file(&meta.id, file, None)),
                 };
-                let cancelled = matches!(
-                    outcome,
-                    Outcome::Cancelled { .. } | Outcome::InstanceCancelled { .. }
-                );
                 self.refresh_after_invitation();
                 let unqueued = self.report_unqueued(queued);
-                if cancelled {
-                    return Task::batch([unqueued, self.toast_info(&fl!("invitation-cancelled"))]);
+                match quiet_notice(&outcome) {
+                    Some(Ok(info)) => Task::batch([unqueued, self.toast_info(&info)]),
+                    Some(Err(error)) => Task::batch([unqueued, self.toast_error(&error)]),
+                    None => unqueued,
                 }
-                unqueued
             }
             Err(why) => {
                 tracing::warn!(%why, "could not apply an iTIP payload");
@@ -5921,6 +5947,49 @@ mod tests {
         ));
         assert!(!matches_search("budget", &occurrence, None));
         assert!(matches_search("room 4", &occurrence, None));
+    }
+
+    #[test]
+    fn a_cancel_from_someone_else_is_refused_and_said_so() {
+        use cosmic_pim_caldav::itip::{self, Outcome};
+        let collection = tempfile::tempdir().unwrap();
+        let review = invitation("review@x", 1, "Review");
+        itip::apply(collection.path(), &review.ics, "me@example.com", None).unwrap();
+
+        // The same meeting, cancelled by a mail from someone who is not boss@.
+        let cancel = itip::with_method(&review.ics, "CANCEL");
+        let outcome = itip::apply(
+            collection.path(),
+            &cancel,
+            "me@example.com",
+            Some("mallory@example.com"),
+        )
+        .unwrap();
+        assert_eq!(outcome, Outcome::NotFromOrganizer);
+        assert!(
+            matches!(quiet_notice(&outcome), Some(Err(_))),
+            "an ignored cancellation must be visible"
+        );
+        assert!(matches!(
+            quiet_notice(&Outcome::Cancelled {
+                file: "x.ics".into()
+            }),
+            Some(Ok(_))
+        ));
+    }
+
+    #[test]
+    fn an_invitation_without_an_organizer_is_not_one_to_answer() {
+        let ics = "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:x@y\r\n\
+                   DTSTART:20260804T090000Z\r\nATTENDEE:mailto:me@example.com\r\n\
+                   END:VEVENT\r\nEND:VCALENDAR\r\n";
+        let parsed = cosmic_pim_caldav::itip::parse(ics).unwrap();
+        assert!(!parsed.is_from_organizer("me@example.com", None));
+        assert!(
+            invitation("review@x", 1, "Review")
+                .parsed
+                .is_from_organizer("me@example.com", None)
+        );
     }
 
     #[test]

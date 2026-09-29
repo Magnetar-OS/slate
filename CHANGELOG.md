@@ -98,6 +98,7 @@ All notable user-facing changes to Slate. The format follows
 - An all-day event on the day the clocks go back no longer spills into the next day.
 - Deleting one instance of an accepted meeting, or everything from one instance on, no longer changes its revision number, so the organizer's later updates still apply.
 - Moving every event of a series to a new time takes its individually changed occurrences along, instead of leaving each one at the old time beside the moved series.
+- An invitation or cancellation that was not sent by the meeting's organizer is refused with a message, instead of being added to the calendar or cancelling a meeting.
 
 ## [1.1.0] - 2026-09-22
 

@@ -45,7 +45,7 @@ cosmic-pim-caldav = "1.0.0"
 # carrying a git dependency. That is not a state we can fix from here; it stays
 # a git dependency until pop-os publishes. Uncomment the [patch] at the bottom
 # of this file to build it from a local clone instead.
-cosmic-ext-widgets = { git = "https://github.com/Magnetar-OS/cosmic-ext-widgets.git", tag = "v1.0.0" }
+cosmic-ext-widgets = { git = "https://github.com/Magnetar-OS/cosmic-ext-widgets.git", tag = "v1.0.1" }
 i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
 i18n-embed-fl = "0.10"
 rust-embed = "8.12"

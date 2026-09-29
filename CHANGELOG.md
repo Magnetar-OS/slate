@@ -5,6 +5,8 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-29
+
 ### Added
 
 - Rename, recolour and delete calendars kept on this computer, in Settings.
@@ -257,6 +259,7 @@ All notable user-facing changes to Slate. The format follows
   own writes (contacts, accounts, cache index).
 - Keyboard shortcuts work on non-Latin keyboard layouts.
 
-[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/Magnetar-OS/slate/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Magnetar-OS/slate/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/Magnetar-OS/slate/releases/tag/v1.0.1

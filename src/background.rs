@@ -15,9 +15,10 @@
 //! daemon over [`BackgroundProxy`] instead of running its own pass, and runs
 //! [`sync_accounts`] itself only when no daemon is there to ask.
 //!
-//! One window remains, and it is the substrate's to close: a save writes the
-//! event file and then queues it, and a pass that runs between the two sees
-//! a changed file with nothing queued for it.
+//! A save and its enqueue are one step too (cosmic-pim 2.1's
+//! `save_and_queue`, through the app's `save_queued`): a pass decides about a
+//! resource under the collection's lock, and the app writes and queues under
+//! it, so a pass never sees a saved file with nothing queued for it.
 
 /// Where the daemon serves [`Service`].
 pub const OBJECT_PATH: &str = "/com/magnetaros/Slate/Background";

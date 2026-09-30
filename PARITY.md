@@ -55,7 +55,7 @@ before the baseline claim is true.
 |---|---|---|
 | Title, location, description, all-day, start/end | have | |
 | Per-event timezone | have | Start and end zones chosen separately (the flight case); all-day stays a DATE. Exceeds GNOME Calendar, whose editor has no TZ picker. |
-| Reminders set in the editor | have | The editor lists an event's reminders and adds or removes them from presets (at the start up to a week before); without any, the calendar's default applies. |
+| Reminders set in the editor | have | The editor lists an event's reminders and adds or removes them from presets (at the start up to a week before); it also lists, read-only, those another app set from the end or at a fixed time. Without any reminder of any kind, the calendar's default applies. |
 | Join button for meeting links | have | Meet/Zoom/Teams/Jitsi/BBB from `LOCATION`/`DESCRIPTION`, any `https` URI from `CONFERENCE`; on the event and on its reminder. |
 | Weather in the grid | gap | GNOME Calendar shows a forecast in month view. The one allowed exception to the no-frills rule: optional, off by default, open-meteo (keyless) — not scheduled; nothing user-critical waits on it. |
 
@@ -159,7 +159,7 @@ loses nothing they use.
 | Show as busy/free (`TRANSP`) | gap | Meaningful mostly alongside free/busy scheduling (below). Preserved verbatim. |
 | Priority on events | gap | Tasks have priority; events don't surface it. |
 | Attachments (link URLs) | gap | `ATTACH` not surfaced. Preserved verbatim. |
-| Multiple reminders, custom offsets, before/after end | partial | Several reminders per event, authored from presets; arbitrary offsets and end-relative or absolute triggers are not authorable, and the latter two are not fired (substrate). |
+| Multiple reminders, custom offsets, before/after end | partial | Several reminders per event, authored from presets. Reminders another app set from the end or at a fixed time are fired, shown in the editor and kept through every save, but cannot be authored or removed here; nor can arbitrary offsets. |
 | Event templates / duplicate | gap | Slate M6. |
 
 ### Recurrence
@@ -264,7 +264,7 @@ feature gaps, not loss risks. That property is the audit's best result.
 3. **Custom recurrence authoring.** "Last Friday of the month" is a normal
    meeting; today Slate can keep it but not create it.
 4. **Custom reminder offsets and end-relative alarms.** Presets cover the
-   common cases; the rest round-trip but cannot be authored.
+   common cases; the rest round-trip and fire but cannot be authored.
 5. **The interop field set** (categories, status, privacy, show-as,
    attachments). Individually small; together they are what a Thunderbird
    power user notices first in the editor.

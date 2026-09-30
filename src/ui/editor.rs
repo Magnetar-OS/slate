@@ -6,7 +6,7 @@ use super::format_time;
 use crate::app::Message;
 use crate::config::Config;
 use crate::fl;
-use crate::model::{CalendarMeta, Event, EventTime, Freq, Recurrence, RepeatEnd};
+use crate::model::{Alarm, CalendarMeta, Event, EventTime, Freq, Recurrence, RepeatEnd};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use chrono_tz::Tz;
 use cosmic::iced::{Alignment, Length};
@@ -72,8 +72,14 @@ pub struct Editor {
     pub picking: Option<DateField>,
     pub error: Option<String>,
     /// The event's own reminders, as offsets from its start (negative is
-    /// before). Empty means the calendar's default reminder applies.
+    /// before). The calendar's default applies when this and
+    /// `other_alarms` are both empty.
     pub alarms: Vec<chrono::Duration>,
+    /// How the event's other reminders read — those set from its end or at
+    /// a fixed time, which another app wrote. Shown so the event does not
+    /// look reminder-less; not edited here, and every save leaves them in
+    /// the file as they were.
+    pub other_alarms: Vec<String>,
     /// Who is invited. Edited here; written back by `to_event`, which keeps
     /// each attendee's original line so nothing unmodelled is lost.
     pub attendees: Vec<crate::model::Attendee>,
@@ -183,6 +189,40 @@ pub fn alarm_label(offset: chrono::Duration) -> String {
     }
 }
 
+/// "5 minutes before the end", "On Thu 6 Aug at 09:00" — a reminder the
+/// editor shows but does not author. `None` for one set from the start,
+/// which [`alarm_label`] words and the editor edits.
+#[must_use]
+pub fn other_alarm_label(alarm: Alarm, local: Tz, config: &Config) -> Option<String> {
+    match alarm {
+        Alarm::Start(_) => None,
+        Alarm::End(offset) if offset == chrono::Duration::zero() => Some(fl!("reminder-at-end")),
+        Alarm::End(offset) if offset < chrono::Duration::zero() => {
+            Some(fl!("reminder-before-end", duration = span_label(-offset)))
+        }
+        Alarm::End(offset) => Some(fl!("reminder-after-end", duration = span_label(offset))),
+        Alarm::At(instant) => {
+            let wall = instant.with_timezone(&local).naive_local();
+            Some(fl!(
+                "reminder-on",
+                day = super::format_day(wall.date()),
+                time = format_time(wall.time(), config)
+            ))
+        }
+    }
+}
+
+/// "2 days", "3 hours", "15 minutes": the largest whole unit.
+fn span_label(span: chrono::Duration) -> String {
+    if span.num_seconds() % 86_400 == 0 {
+        fl!("span-days", days = span.num_days())
+    } else if span.num_seconds() % 3_600 == 0 {
+        fl!("span-hours", hours = span.num_hours())
+    } else {
+        fl!("span-minutes", minutes = span.num_minutes())
+    }
+}
+
 /// Wall clock of `time` in `zone`. All-day and floating values are already
 /// wall clock; zoned ones convert through their instant.
 fn wall_in(time: EventTime, zone: Tz, local: Tz) -> NaiveDateTime {
@@ -229,6 +269,7 @@ impl Editor {
             picking: None,
             error: None,
             alarms: Vec::new(),
+            other_alarms: Vec::new(),
             attendees: Vec::new(),
             attendee_draft: String::new(),
             availability: None,
@@ -338,12 +379,24 @@ impl Editor {
             picking: None,
             error: None,
             alarms: event.alarms.clone(),
+            other_alarms: Vec::new(),
             attendees: event.attendees.clone(),
             attendee_draft: String::new(),
             availability: None,
             checking_availability: false,
             original: Some(event.clone()),
         }
+    }
+
+    /// Shows `alarms` — every alarm the event's file holds — beside the
+    /// start-relative ones the editor edits.
+    #[must_use]
+    pub fn showing_alarms(mut self, alarms: &[Alarm], local: Tz, config: &Config) -> Self {
+        self.other_alarms = alarms
+            .iter()
+            .filter_map(|alarm| other_alarm_label(*alarm, local, config))
+            .collect();
+        self
     }
 
     #[must_use]
@@ -719,8 +772,14 @@ impl Editor {
 
     fn reminders_section(&self) -> Element<'_, Message> {
         let mut section = widget::settings::section().title(fl!("event-reminders"));
-        if self.alarms.is_empty() {
+        if self.alarms.is_empty() && self.other_alarms.is_empty() {
             section = section.add(widget::text::caption(fl!("event-reminders-default")));
+        }
+        for label in &self.other_alarms {
+            section = section.add(
+                widget::settings::item::builder(label.clone())
+                    .control(widget::text::caption(fl!("event-reminder-kept"))),
+            );
         }
         for (index, offset) in self.alarms.iter().enumerate() {
             section = section.add(
@@ -1356,6 +1415,73 @@ mod tests {
                 .alarms,
             vec![chrono::Duration::days(-1)],
             "the reminder edit was not written"
+        );
+    }
+
+    #[test]
+    fn reminders_from_the_end_or_at_a_time_are_shown_and_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(
+            &dir.path().join("calendars"),
+            &dir.path().join("index.sqlite"),
+        )
+        .unwrap();
+        let calendar = store
+            .create_calendar("Personal", crate::model::PALETTE[0])
+            .unwrap();
+        // Written by another app: one alarm of each kind.
+        std::fs::write(
+            calendar.path.join("exam.ics"),
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Other//EN\r\n\
+             BEGIN:VEVENT\r\nUID:exam\r\nDTSTAMP:20260801T000000Z\r\n\
+             DTSTART:20260804T090000Z\r\nDTEND:20260804T100000Z\r\nSUMMARY:Exam\r\n\
+             BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:Exam\r\n\
+             TRIGGER:-PT10M\r\nEND:VALARM\r\n\
+             BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:Exam\r\n\
+             TRIGGER;RELATED=END:-PT15M\r\nEND:VALARM\r\n\
+             BEGIN:VALARM\r\nACTION:AUDIO\r\n\
+             TRIGGER;VALUE=DATE-TIME:20260803T170000Z\r\nEND:VALARM\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n",
+        )
+        .unwrap();
+        store.refresh().unwrap();
+        let event = store.event(&calendar.id, "exam").unwrap().unwrap();
+        let alarms = store.alarms(&event).unwrap();
+
+        let config = Config::default();
+        let mut editor = Editor::from_event(&event, chrono_tz::UTC).showing_alarms(
+            &alarms,
+            chrono_tz::UTC,
+            &config,
+        );
+        assert_eq!(editor.alarms, vec![chrono::Duration::minutes(-10)]);
+        assert_eq!(
+            editor.other_alarms,
+            vec![
+                fl!(
+                    "reminder-before-end",
+                    duration = fl!("span-minutes", minutes = 15)
+                ),
+                fl!(
+                    "reminder-on",
+                    day = super::super::format_day(NaiveDate::from_ymd_opt(2026, 8, 3).unwrap()),
+                    time = format_time(NaiveTime::from_hms_opt(17, 0, 0).unwrap(), &config)
+                ),
+            ]
+        );
+
+        // Editing the ones the editor owns leaves the others as written.
+        editor.remove_alarm(0);
+        editor.summary = "Final exam".into();
+        store
+            .save(&editor.to_event(chrono_tz::UTC).unwrap())
+            .unwrap();
+        let saved = store.event(&calendar.id, "exam").unwrap().unwrap();
+        assert_eq!(saved.summary, "Final exam");
+        assert_eq!(
+            store.alarms(&saved).unwrap(),
+            alarms[1..],
+            "a reminder the editor does not author was lost"
         );
     }
 

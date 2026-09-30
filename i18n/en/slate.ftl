@@ -136,6 +136,24 @@ reminder-after-start = { $minutes } { $minutes ->
         [one] minute
        *[other] minutes
     } after the start
+# Reminders another app set from the event's end: "15 minutes before the end".
+reminder-at-end = At the end
+reminder-before-end = { $duration } before the end
+reminder-after-end = { $duration } after the end
+span-minutes = { $minutes } { $minutes ->
+        [one] minute
+       *[other] minutes
+    }
+span-hours = { $hours } { $hours ->
+        [one] hour
+       *[other] hours
+    }
+span-days = { $days } { $days ->
+        [one] day
+       *[other] days
+    }
+# Beside a reminder the editor shows but cannot change.
+event-reminder-kept = Set in another app
 event-reminders = Reminders
 event-reminders-default = The calendar's default reminder
 event-reminder-add = Add a reminder

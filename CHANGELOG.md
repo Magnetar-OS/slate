@@ -12,6 +12,15 @@ All notable user-facing changes to Slate. The format follows
 
 ### Fixed
 
+- Reminders another app set relative to the end of an event, or at a fixed
+  time, now fire, and the event editor lists them. They were ignored, so an
+  event whose only reminder was one of those looked as if it had none and
+  got the calendar's default reminder instead.
+- A reminder an hour or two before an event just after the clocks go forward
+  fires. Reminders are now worked out in real time rather than on the wall
+  clock, where that one landed in the skipped hour and never fired. A
+  reminder whole days ahead of an event across a clock change now comes an
+  hour earlier or later on the wall clock than before.
 - Adding, changing or removing a reminder on an event that already exists is
   saved. The editor accepted the change and the save dropped it.
 - Moving a repeating event to another calendar takes its changed occurrences

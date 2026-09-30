@@ -2187,17 +2187,24 @@ impl cosmic::Application for AppModel {
                 match store.event_instance(&calendar_id, &uid, instant) {
                     Ok(Some(event)) => {
                         let local = store.local_timezone();
+                        // Every alarm in the file, so one set from the end or
+                        // at a fixed time shows too.
+                        let alarms = store.alarms(&event).unwrap_or_else(|why| {
+                            tracing::warn!(uid, %why, "could not read the event's alarms");
+                            Vec::new()
+                        });
                         // A generated instance of a series opens on its own
                         // dates, carrying its identity for the scope prompt.
                         // An override or a one-off opens as itself.
-                        self.editor = Some(match instant {
+                        let editor = match instant {
                             Some(instant)
                                 if event.rrule.is_some() && event.recurrence_id.is_none() =>
                             {
                                 Editor::from_series_occurrence(&event, instant, local)
                             }
                             _ => Editor::from_event(&event, local),
-                        });
+                        };
+                        self.editor = Some(editor.showing_alarms(&alarms, local, &self.config));
                         self.context_page = ContextPage::Editor;
                         self.core.window.show_context = true;
                     }

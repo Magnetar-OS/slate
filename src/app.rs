@@ -4705,12 +4705,10 @@ impl AppModel {
             return Task::none();
         };
         let root = store.root().to_path_buf();
-        let written = save_queued(&root, &touched, || match &moved_from {
-            Some(original) => store
-                .move_to_calendar(original, &event.calendar_id)
-                .and_then(|_| store.save(&event)),
-            None => store.save(&event),
-        });
+        let from = moved_from
+            .as_ref()
+            .map_or(event.calendar_id.as_str(), |original| &original.calendar_id);
+        let written = save_queued(&root, &touched, || save_moving(store, from, &event));
 
         match written {
             Ok((Ok(()), queued)) => {
@@ -4882,13 +4880,7 @@ impl AppModel {
             (series.calendar_id.as_str(), series.file_name.as_str()),
         ];
         let result = match save_queued(&root, &touched, || {
-            if series.calendar_id == master.calendar_id {
-                store.save(&series)
-            } else {
-                store
-                    .move_to_calendar(&successor, &series.calendar_id)
-                    .and_then(|_| store.save(&series))
-            }
+            save_moving(store, &master.calendar_id, &series)
         }) {
             Ok((result, also)) => {
                 queued = queued.and(also);
@@ -5627,6 +5619,28 @@ fn whole_series_edit(
     series
 }
 
+/// Saves `event`, moving it first from `from` when that is not the calendar
+/// it names.
+///
+/// `Store::move_to_calendar` moves the whole event — a series with its
+/// changed occurrences and everything the model does not carry — and saves
+/// the event it is given over its own component at the other end, so the
+/// edit travels with the move.
+fn save_moving(
+    store: &mut Store,
+    from: &str,
+    event: &crate::model::Event,
+) -> Result<(), crate::store::StoreError> {
+    if from == event.calendar_id {
+        return store.save(event);
+    }
+    let mut leaving = event.clone();
+    from.clone_into(&mut leaving.calendar_id);
+    store
+        .move_to_calendar(&leaving, &event.calendar_id)
+        .map(|_| ())
+}
+
 /// Writes a scoped edit of `master`'s series: `event` is the new master when
 /// `whole`, one override otherwise. A calendar change moves the series first.
 ///
@@ -6082,6 +6096,71 @@ mod tests {
             matches!(pending(&calendar)[..], [PushOp::Delete { .. }]),
             "{:?}",
             pending(&calendar)
+        );
+    }
+
+    /// The summaries shown on 11 Aug, and the calendar each comes from.
+    fn shown_on_the_eleventh(store: &Store) -> Vec<(String, String)> {
+        store
+            .occurrences(
+                day(2026, 8, 11),
+                day(2026, 8, 12),
+                &std::collections::HashSet::new(),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|o| (o.calendar_id, o.summary))
+            .collect()
+    }
+
+    #[test]
+    fn a_series_moved_to_another_calendar_keeps_its_changed_occurrences() {
+        let (_dir, mut store) = temp_store();
+        let home = store.create_calendar("Home", PALETTE[0]).unwrap();
+        let work = store.create_calendar("Work", PALETTE[1]).unwrap();
+        std::fs::write(
+            home.path.join("standup.ics"),
+            SERIES_WITH_A_CHANGED_INSTANCE,
+        )
+        .unwrap();
+        store.refresh().unwrap();
+
+        // Moved in the editor, with a new title on the way.
+        let mut edited = store.event(&home.id, "standup").unwrap().unwrap();
+        edited.summary = "Team standup".into();
+        edited.calendar_id.clone_from(&work.id);
+        save_moving(&mut store, &home.id, &edited).unwrap();
+
+        assert_eq!(
+            shown_on_the_eleventh(&store),
+            vec![(work.id.clone(), "Standup (demo)".to_owned())],
+            "the changed occurrence was lost in the move"
+        );
+        let moved = store.event(&work.id, "standup").unwrap().unwrap();
+        assert_eq!(moved.summary, "Team standup");
+        assert!(store.event(&home.id, "standup").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_whole_series_edit_that_moves_calendars_keeps_its_changed_occurrences() {
+        let (_dir, mut store) = temp_store();
+        let home = store.create_calendar("Home", PALETTE[0]).unwrap();
+        let work = store.create_calendar("Work", PALETTE[1]).unwrap();
+        std::fs::write(
+            home.path.join("standup.ics"),
+            SERIES_WITH_A_CHANGED_INSTANCE,
+        )
+        .unwrap();
+        store.refresh().unwrap();
+        let master = store.event(&home.id, "standup").unwrap().unwrap();
+
+        let mut series = master.clone();
+        series.calendar_id.clone_from(&work.id);
+        write_series_edit(&mut store, &master, &series, true).unwrap();
+
+        assert_eq!(
+            shown_on_the_eleventh(&store),
+            vec![(work.id.clone(), "Standup (demo)".to_owned())]
         );
     }
 

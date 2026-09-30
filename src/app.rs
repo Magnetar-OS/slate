@@ -1923,10 +1923,10 @@ impl cosmic::Application for AppModel {
 
                 let mut todo = crate::model::Todo::draft(&calendar_id);
                 todo.summary = summary;
-                match store.save_todo(&todo) {
-                    Ok(()) => {
-                        // A fresh draft has no previous revision to merge against.
-                        let queued = queue_writeback_file(&todo.calendar_id, &todo.file_name, None);
+                let root = store.root().to_path_buf();
+                let touched = [(todo.calendar_id.as_str(), todo.file_name.as_str())];
+                match save_queued(&root, &touched, || store.save_todo(&todo)) {
+                    Ok((Ok(()), queued)) => {
                         self.journal_finish(vec![crate::undo::Entry {
                             calendar_id: todo.calendar_id.clone(),
                             file_name: todo.file_name.clone(),
@@ -1937,6 +1937,7 @@ impl cosmic::Application for AppModel {
                         self.reload_tasks();
                         return self.report_unqueued(queued);
                     }
+                    Ok((Err(why), queued)) => return self.report_failed(&why, queued),
                     Err(why) => return self.toast_error(&why.to_string()),
                 }
             }
@@ -1953,23 +1954,21 @@ impl cosmic::Application for AppModel {
                     return Task::none();
                 };
                 todo.set_done(done);
-                let base = writeback_base(store, &todo.calendar_id, &todo.file_name);
-                match store.save_todo(&todo) {
-                    Ok(()) => {
-                        let queued = queue_writeback_file(
-                            &todo.calendar_id,
-                            &todo.file_name,
-                            base.as_deref(),
-                        );
+                let before = file_bytes(store, &todo.calendar_id, &todo.file_name);
+                let root = store.root().to_path_buf();
+                let touched = [(todo.calendar_id.as_str(), todo.file_name.as_str())];
+                match save_queued(&root, &touched, || store.save_todo(&todo)) {
+                    Ok((Ok(()), queued)) => {
                         self.journal_finish(vec![crate::undo::Entry {
                             calendar_id: todo.calendar_id.clone(),
                             file_name: todo.file_name.clone(),
-                            before: base,
+                            before,
                             after: None,
                         }]);
                         self.reload_tasks();
                         return self.report_unqueued(queued);
                     }
+                    Ok((Err(why), queued)) => return self.report_failed(&why, queued),
                     Err(why) => return self.toast_error(&why.to_string()),
                 }
             }
@@ -2804,49 +2803,49 @@ impl AppModel {
             return Task::none();
         };
 
-        // Snapshotted before the delete below, or undo could not restore it.
+        // Snapshotted before the change, for undo.
         let moved_before = moved_from
             .as_ref()
-            .and_then(|original| writeback_base(store, &original.calendar_id, &original.file_name));
-        let mut queued = Ok(());
+            .and_then(|original| file_bytes(store, &original.calendar_id, &original.file_name));
+        let before = file_bytes(store, &todo.calendar_id, &todo.file_name);
+        let root = store.root().to_path_buf();
+        let mut touched = vec![(todo.calendar_id.as_str(), todo.file_name.as_str())];
         if let Some(original) = &moved_from {
-            if let Err(why) = store.delete_todo(&original.calendar_id, &original.uid) {
-                return self.toast_error(&why.to_string());
-            }
-            queued = queue_writeback_removal(
-                store,
-                &original.calendar_id,
-                &original.file_name,
-                moved_before.as_deref(),
-            );
+            touched.push((&original.calendar_id, &original.file_name));
         }
 
-        let base = writeback_base(store, &todo.calendar_id, &todo.file_name);
-        let moved_entry = moved_from.as_ref().map(|original| crate::undo::Entry {
-            calendar_id: original.calendar_id.clone(),
-            file_name: original.file_name.clone(),
-            before: moved_before,
-            after: None,
+        // A move writes the new copy before removing the old one, so a
+        // failure half way leaves one in each calendar rather than none.
+        let written = save_queued(&root, &touched, || {
+            store.save_todo(&todo)?;
+            match &moved_from {
+                Some(original) => store.delete_todo(&original.calendar_id, &original.uid),
+                None => Ok(()),
+            }
         });
-        match store.save_todo(&todo) {
-            Ok(()) => {
-                let queued = queued.and(queue_writeback_file(
-                    &todo.calendar_id,
-                    &todo.file_name,
-                    base.as_deref(),
-                ));
+        match written {
+            Ok((Ok(()), queued)) => {
                 let mut journal = vec![crate::undo::Entry {
                     calendar_id: todo.calendar_id.clone(),
                     file_name: todo.file_name.clone(),
-                    before: base,
+                    before,
                     after: None,
                 }];
-                journal.extend(moved_entry);
+                journal.extend(moved_from.as_ref().map(|original| crate::undo::Entry {
+                    calendar_id: original.calendar_id.clone(),
+                    file_name: original.file_name.clone(),
+                    before: moved_before,
+                    after: None,
+                }));
                 self.journal_finish(journal);
                 self.task_editor = None;
                 self.core.window.show_context = false;
                 self.reload_tasks();
                 self.report_unqueued(queued)
+            }
+            Ok((Err(why), queued)) => {
+                self.reload_tasks();
+                self.report_failed(&why, queued)
             }
             Err(why) => self.toast_error(&why.to_string()),
         }
@@ -2865,15 +2864,13 @@ impl AppModel {
             return Task::none();
         };
 
-        let before = writeback_base(store, &original.calendar_id, &original.file_name);
-        match store.delete_todo(&original.calendar_id, &original.uid) {
-            Ok(()) => {
-                let queued = queue_writeback_removal(
-                    store,
-                    &original.calendar_id,
-                    &original.file_name,
-                    before.as_deref(),
-                );
+        let before = file_bytes(store, &original.calendar_id, &original.file_name);
+        let root = store.root().to_path_buf();
+        let touched = [(original.calendar_id.as_str(), original.file_name.as_str())];
+        match save_queued(&root, &touched, || {
+            store.delete_todo(&original.calendar_id, &original.uid)
+        }) {
+            Ok((Ok(()), queued)) => {
                 self.journal_finish(vec![crate::undo::Entry {
                     calendar_id: original.calendar_id.clone(),
                     file_name: original.file_name.clone(),
@@ -2885,6 +2882,7 @@ impl AppModel {
                 self.reload_tasks();
                 self.report_unqueued(queued)
             }
+            Ok((Err(why), queued)) => self.report_failed(&why, queued),
             Err(why) => self.toast_error(&why.to_string()),
         }
     }
@@ -3936,46 +3934,37 @@ impl AppModel {
             return self.toast_error(&fl!("invitation-no-address"));
         };
         let sender = invitation.sender.as_deref();
-        let mut queued = Ok(());
+        let uid = invitation.parsed.uid.clone();
+        let declined = answer == InviteAnswer::Declined;
+        let Some(store) = self.store.as_mut() else {
+            return Task::none();
+        };
 
-        if answer == InviteAnswer::Declined {
-            match withdraw_declined(&meta.path, &invitation.ics, &me.address) {
-                Ok(itip::Outcome::Cancelled { file }) => {
-                    queued = queue_writeback_delete_file(&meta.id, &file);
-                }
-                Ok(itip::Outcome::InstanceCancelled { file }) => {
-                    queued = queue_writeback_file(&meta.id, &file, None);
-                }
-                Ok(itip::Outcome::Stale) => {
-                    self.invitations.remove(0);
-                    return self.toast_error(&fl!("invitation-stale"));
-                }
-                // Nothing was stored: nothing to withdraw.
-                Ok(_) => {}
-                Err(why) => return self.toast_error(&why.to_string()),
+        let applied = apply_itip_queued(store, &meta, &uid, || {
+            if declined {
+                withdraw_declined(&meta.path, &invitation.ics, &me.address)
+            } else {
+                itip::apply(&meta.path, &invitation.ics, &me.address, sender)
             }
-        } else {
-            match itip::apply(&meta.path, &invitation.ics, &me.address, sender) {
-                // Neither can succeed on a retry; the invitation is done with.
-                Ok(itip::Outcome::Stale) => {
-                    self.invitations.remove(0);
-                    return self.toast_error(&fl!("invitation-stale"));
-                }
-                Ok(itip::Outcome::NotForMe) => {
-                    self.invitations.remove(0);
-                    return self.toast_error(&fl!("invitation-not-for-me"));
-                }
-                Ok(itip::Outcome::NotFromOrganizer) => {
-                    self.invitations.remove(0);
-                    return self.toast_error(&fl!("invitation-not-from-organizer"));
-                }
-                Ok(outcome) => {
-                    if let Some(file) = outcome.file() {
-                        queued = queue_writeback_file(&meta.id, file, None);
-                    }
-                }
-                Err(why) => return self.toast_error(&why.to_string()),
+        });
+        let (outcome, mut queued) = match applied {
+            Ok(applied) => applied,
+            Err(why) => return self.toast_error(&why.to_string()),
+        };
+        // None of these can succeed on a retry; the invitation is done with.
+        // A decline that finds nothing stored has nothing to withdraw.
+        let refusal = match outcome {
+            Ok(itip::Outcome::Stale) => Some(fl!("invitation-stale")),
+            Ok(itip::Outcome::NotForMe) if !declined => Some(fl!("invitation-not-for-me")),
+            Ok(itip::Outcome::NotFromOrganizer) if !declined => {
+                Some(fl!("invitation-not-from-organizer"))
             }
+            Ok(_) => None,
+            Err(why) => return self.report_failed(&why, queued),
+        };
+        if let Some(refusal) = refusal {
+            self.invitations.remove(0);
+            return Task::batch([self.toast_error(&refusal), self.report_unqueued(queued)]);
         }
         // Answered: what remains is telling the organizer.
         self.invitations.remove(0);
@@ -4004,11 +3993,15 @@ impl AppModel {
             &me.name,
         );
 
-        if answer != InviteAnswer::Declined {
-            match itip::apply(&meta.path, &reply_ics, &me.address, None) {
-                Ok(outcome) => {
-                    if let Some(file) = outcome.file() {
-                        queued = queue_writeback_file(&meta.id, file, None);
+        if !declined && let Some(store) = self.store.as_mut() {
+            let recorded = apply_itip_queued(store, &meta, &uid, || {
+                itip::apply(&meta.path, &reply_ics, &me.address, None)
+            });
+            match recorded {
+                Ok((recorded, also)) => {
+                    queued = queued.and(also);
+                    if let Err(why) = recorded {
+                        tracing::warn!(%why, "could not record the PARTSTAT locally");
                     }
                 }
                 Err(why) => tracing::warn!(%why, "could not record the PARTSTAT locally"),
@@ -4043,8 +4036,6 @@ impl AppModel {
         delivery: &crate::scheduling::Delivery,
         parsed: &cosmic_pim_caldav::itip::Itip,
     ) -> Task<cosmic::Action<Message>> {
-        use cosmic_pim_caldav::itip::Outcome;
-
         self.reload_accounts();
         let Some(meta) = self.invitation_collection(&delivery.account_id) else {
             return Task::none();
@@ -4054,16 +4045,16 @@ impl AppModel {
             .map(|invitee| invitee.address)
             .unwrap_or_default();
         let sender = delivery.sender.as_deref();
-        match cosmic_pim_caldav::itip::apply(&meta.path, &delivery.ics, &me, sender) {
-            Ok(outcome) => {
-                let queued = match &outcome {
-                    // A whole-series CANCEL removed the file; the deletion
-                    // must reach the server too.
-                    Outcome::Cancelled { file } => queue_writeback_delete_file(&meta.id, file),
-                    other => other
-                        .file()
-                        .map_or(Ok(()), |file| queue_writeback_file(&meta.id, file, None)),
-                };
+        let Some(store) = self.store.as_mut() else {
+            return Task::none();
+        };
+        // A whole-series CANCEL removes the file; the deletion reaches the
+        // server with it.
+        let applied = apply_itip_queued(store, &meta, &parsed.uid, || {
+            cosmic_pim_caldav::itip::apply(&meta.path, &delivery.ics, &me, sender)
+        });
+        match applied {
+            Ok((Ok(outcome), queued)) => {
                 self.refresh_after_invitation();
                 let unqueued = self.report_unqueued(queued);
                 match quiet_notice(&outcome) {
@@ -4071,6 +4062,10 @@ impl AppModel {
                     Some(Err(error)) => Task::batch([unqueued, self.toast_error(&error)]),
                     None => unqueued,
                 }
+            }
+            Ok((Err(why), queued)) => {
+                tracing::warn!(%why, "could not apply an iTIP payload");
+                self.report_unqueued(queued)
             }
             Err(why) => {
                 tracing::warn!(%why, "could not apply an iTIP payload");
@@ -4178,9 +4173,10 @@ impl AppModel {
             event.end = crate::model::EventTime::Zoned(end, local);
         }
 
-        match store.save(&event) {
-            Ok(()) => {
-                let queued = queue_writeback_file(&event.calendar_id, &event.file_name, None);
+        let root = store.root().to_path_buf();
+        let touched = [(event.calendar_id.as_str(), event.file_name.as_str())];
+        match save_queued(&root, &touched, || store.save(&event)) {
+            Ok((Ok(()), queued)) => {
                 self.journal_finish(vec![crate::undo::Entry {
                     calendar_id: event.calendar_id.clone(),
                     file_name: event.file_name.clone(),
@@ -4195,6 +4191,9 @@ impl AppModel {
                     self.report_unqueued(queued),
                 ])
             }
+            Ok((Err(why), queued)) => {
+                self.report_failed(&format!("{}: {why}", fl!("error-save-event")), queued)
+            }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
         }
     }
@@ -4205,7 +4204,7 @@ impl AppModel {
             before: self
                 .store
                 .as_ref()
-                .and_then(|store| writeback_base(store, calendar_id, file_name)),
+                .and_then(|store| file_bytes(store, calendar_id, file_name)),
             calendar_id: calendar_id.to_owned(),
             file_name: file_name.to_owned(),
             after: None,
@@ -4217,7 +4216,7 @@ impl AppModel {
     fn journal_finish(&mut self, mut entries: Vec<crate::undo::Entry>) {
         if let Some(store) = self.store.as_ref() {
             for entry in &mut entries {
-                entry.after = writeback_base(store, &entry.calendar_id, &entry.file_name);
+                entry.after = file_bytes(store, &entry.calendar_id, &entry.file_name);
             }
         }
         self.history.record(entries);
@@ -4272,36 +4271,35 @@ impl AppModel {
             });
         }
 
+        let Some(root) = self.store.as_ref().map(|store| store.root().to_path_buf()) else {
+            return Task::none();
+        };
         let mut queued = Ok(());
         let mut failed = Vec::new();
-        for ((entry, path), current) in group.entries.iter().zip(&paths).zip(current) {
+        for (entry, path) in group.entries.iter().zip(&paths) {
             let desired = if undo { &entry.before } else { &entry.after };
-
-            match desired {
-                Some(bytes) => {
-                    if let Err(why) = cosmic_pim_core::atomic::write(path, bytes, None) {
-                        tracing::warn!(%why, file = entry.file_name, "history restore failed");
-                        failed.push(entry.file_name.clone());
-                        continue;
+            // Each file is restored and queued as one step; the bytes it
+            // replaces become the merge base.
+            let touched = [(entry.calendar_id.as_str(), entry.file_name.as_str())];
+            let restored = save_queued(&root, &touched, || match desired {
+                Some(bytes) => cosmic_pim_core::atomic::write(path, bytes, None).map(|_| ()),
+                None => match std::fs::remove_file(path) {
+                    Err(why) if why.kind() != std::io::ErrorKind::NotFound => {
+                        Err(cosmic_pim_core::atomic::Error::from(why))
                     }
-                    queued = queued.and(queue_writeback_file(
-                        &entry.calendar_id,
-                        &entry.file_name,
-                        current.as_deref(),
-                    ));
+                    _ => Ok(()),
+                },
+            });
+            match restored {
+                Ok((Ok(()), also)) => queued = queued.and(also),
+                Ok((Err(why), also)) => {
+                    tracing::warn!(%why, file = entry.file_name, "history restore failed");
+                    failed.push(entry.file_name.clone());
+                    queued = queued.and(also);
                 }
-                None => {
-                    if let Err(why) = std::fs::remove_file(path)
-                        && why.kind() != std::io::ErrorKind::NotFound
-                    {
-                        tracing::warn!(%why, file = entry.file_name, "history removal failed");
-                        failed.push(entry.file_name.clone());
-                        continue;
-                    }
-                    queued = queued.and(queue_writeback_delete_file(
-                        &entry.calendar_id,
-                        &entry.file_name,
-                    ));
+                Err(why) => {
+                    tracing::warn!(%why, file = entry.file_name, "history restore failed");
+                    failed.push(entry.file_name.clone());
                 }
             }
         }
@@ -4693,48 +4691,38 @@ impl AppModel {
             .filter(|original| original.calendar_id != event.calendar_id)
             .cloned();
 
-        let Some(store) = self.store.as_mut() else {
-            return Task::none();
-        };
-
-        let base = writeback_base(store, &event.calendar_id, &event.file_name);
-        let moved_base = moved_from
-            .as_ref()
-            .and_then(|original| writeback_base(store, &original.calendar_id, &original.file_name));
         let mut journal = vec![self.journal_before(&event.calendar_id, &event.file_name)];
+        let mut touched = vec![(event.calendar_id.as_str(), event.file_name.as_str())];
+        // A move changes the old calendar's file too: its server still holds
+        // the event, and without the removal queued there the next sync
+        // brings it back as a duplicate.
         if let Some(original) = &moved_from {
             journal.push(self.journal_before(&original.calendar_id, &original.file_name));
+            touched.push((&original.calendar_id, &original.file_name));
         }
 
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
-        let result = match &moved_from {
+        let root = store.root().to_path_buf();
+        let written = save_queued(&root, &touched, || match &moved_from {
             Some(original) => store
                 .move_to_calendar(original, &event.calendar_id)
                 .and_then(|_| store.save(&event)),
             None => store.save(&event),
-        };
+        });
 
-        match result {
-            Ok(()) => {
-                let mut queued =
-                    queue_writeback_file(&event.calendar_id, &event.file_name, base.as_deref());
-                // The old calendar's server still holds it; without this the
-                // next sync brings it back as a duplicate.
-                if let Some(original) = &moved_from {
-                    queued = queued.and(queue_writeback_removal(
-                        store,
-                        &original.calendar_id,
-                        &original.file_name,
-                        moved_base.as_deref(),
-                    ));
-                }
+        match written {
+            Ok((Ok(()), queued)) => {
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
                 self.report_unqueued(queued)
+            }
+            Ok((Err(why), queued)) => {
+                self.reload();
+                self.report_failed(&format!("{}: {why}", fl!("error-save-event")), queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
         }
@@ -4788,42 +4776,38 @@ impl AppModel {
             EditScope::Following => unreachable!("handled above"),
         };
 
-        let Some(store) = self.store.as_mut() else {
-            return Task::none();
-        };
-
         // A whole-series edit may also have moved the event to another
         // calendar, which means removing the old file as well.
-        let base = writeback_base(store, &event.calendar_id, &event.file_name);
         let moved = event.calendar_id != master.calendar_id;
-        let master_base = writeback_base(store, &master.calendar_id, &master.file_name);
         let mut journal = vec![self.journal_before(&event.calendar_id, &event.file_name)];
         if moved {
             journal.push(self.journal_before(&master.calendar_id, &master.file_name));
         }
+        let touched = [
+            (event.calendar_id.as_str(), event.file_name.as_str()),
+            (master.calendar_id.as_str(), master.file_name.as_str()),
+        ];
 
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
-        let result = write_series_edit(store, &master, &event, matches!(scope, EditScope::All));
+        let root = store.root().to_path_buf();
+        let whole = matches!(scope, EditScope::All);
+        let written = save_queued(&root, &touched, || {
+            write_series_edit(store, &master, &event, whole)
+        });
 
-        match result {
-            Ok(()) => {
-                let mut queued =
-                    queue_writeback_file(&event.calendar_id, &event.file_name, base.as_deref());
-                if moved {
-                    queued = queued.and(queue_writeback_removal(
-                        store,
-                        &master.calendar_id,
-                        &master.file_name,
-                        master_base.as_deref(),
-                    ));
-                }
+        match written {
+            Ok((Ok(()), queued)) => {
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
                 self.report_unqueued(queued)
+            }
+            Ok((Err(why), queued)) => {
+                self.reload();
+                self.report_failed(&format!("{}: {why}", fl!("error-save-event")), queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
         }
@@ -4841,16 +4825,28 @@ impl AppModel {
             return Task::none();
         };
 
-        // The master's pre-split bytes: the base for the truncated master's
-        // writeback merge. The successor is a new file and has no base.
-        let master_base = writeback_base(store, &master.calendar_id, &master.file_name);
+        // The master's pre-split bytes, for undo.
+        let master_before = file_bytes(store, &master.calendar_id, &master.file_name);
+        let root = store.root().to_path_buf();
 
-        let successor = match store.split_series(&master.calendar_id, &master.uid, instant) {
-            Ok(crate::store::SplitOutcome::Split(successor)) => successor,
+        // The split, locked and queued with the master's file it truncates.
+        // The successor is a new file the split names; it is queued with the
+        // edit below, and until then no sync pass can pull it — the server
+        // has never had it.
+        let master_file = [(master.calendar_id.as_str(), master.file_name.as_str())];
+        let split = save_queued(&root, &master_file, || {
+            store.split_series(&master.calendar_id, &master.uid, instant)
+        });
+        let (successor, mut queued) = match split {
+            Ok((Ok(crate::store::SplitOutcome::Split(successor)), queued)) => (successor, queued),
             // The cut fell on the first instance: nothing precedes it, so
             // "this and following" is the whole series.
-            Ok(crate::store::SplitOutcome::WholeSeries) => {
-                return self.save_with_scope(EditScope::All);
+            Ok((Ok(crate::store::SplitOutcome::WholeSeries), queued)) => {
+                let saved = self.save_with_scope(EditScope::All);
+                return Task::batch([saved, self.report_unqueued(queued)]);
+            }
+            Ok((Err(why), queued)) => {
+                return self.report_failed(&format!("{}: {why}", fl!("error-save-event")), queued);
             }
             Err(why) => return self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
         };
@@ -4877,31 +4873,40 @@ impl AppModel {
 
         // A calendar change in the editor moves the successor only — the past
         // instances stay where the series lived.
-        let result = if series.calendar_id == master.calendar_id {
-            store.save(&series)
-        } else {
-            store
-                .move_to_calendar(&successor, &series.calendar_id)
-                .and_then(|_| store.save(&series))
+        //
+        // The successor is queued wherever it is left, whatever happens to
+        // the edit on top of it: the split has landed, and a failed save of
+        // the edit must not leave a successor the server never hears of.
+        let touched = [
+            (master.calendar_id.as_str(), successor.file_name.as_str()),
+            (series.calendar_id.as_str(), series.file_name.as_str()),
+        ];
+        let result = match save_queued(&root, &touched, || {
+            if series.calendar_id == master.calendar_id {
+                store.save(&series)
+            } else {
+                store
+                    .move_to_calendar(&successor, &series.calendar_id)
+                    .and_then(|_| store.save(&series))
+            }
+        }) {
+            Ok((result, also)) => {
+                queued = queued.and(also);
+                result.map_err(|why| why.to_string())
+            }
+            Err(why) => {
+                queued = queued.and(Err(why.to_string()));
+                Err(why.to_string())
+            }
         };
 
-        // The split landed whatever happens to the edit on top of it: the
-        // truncated master and the successor are both on disk, so both go to
-        // the server and both undo as one step — a failed save of the edit
-        // below must not leave a split the server never hears of and undo
-        // cannot reach.
-        let mut queued = queue_writeback_file(
-            &master.calendar_id,
-            &master.file_name,
-            master_base.as_deref(),
-        );
-        // The successor, wherever it landed: the series' calendar, or the one
-        // the editor moved it to.
+        // Both undo as one step, the successor wherever it landed: the
+        // series' calendar, or the one the editor moved it to.
         let mut journal = vec![
             crate::undo::Entry {
                 calendar_id: master.calendar_id.clone(),
                 file_name: master.file_name.clone(),
-                before: master_base,
+                before: master_before,
                 after: None,
             },
             crate::undo::Entry {
@@ -4919,16 +4924,6 @@ impl AppModel {
                 after: None,
             });
         }
-        if let Some(store) = self.store.as_ref() {
-            for entry in &journal[1..] {
-                queued = queued.and(queue_writeback_removal(
-                    store,
-                    &entry.calendar_id,
-                    &entry.file_name,
-                    None,
-                ));
-            }
-        }
         self.journal_finish(journal);
         self.reload();
 
@@ -4938,10 +4933,7 @@ impl AppModel {
                 self.core.window.show_context = false;
                 self.report_unqueued(queued)
             }
-            Err(why) => {
-                let failed = self.toast_error(&format!("{}: {why}", fl!("error-save-event")));
-                Task::batch([failed, self.report_unqueued(queued)])
-            }
+            Err(why) => self.report_failed(&format!("{}: {why}", fl!("error-save-event")), queued),
         }
     }
 
@@ -4953,49 +4945,34 @@ impl AppModel {
         let (Some(instant), Some(master)) = (editor.occurrence, editor.original.clone()) else {
             return Task::none();
         };
-        let Some(store) = self.store.as_mut() else {
-            return Task::none();
-        };
 
-        let base = writeback_base(store, &master.calendar_id, &master.file_name);
         let journal = vec![self.journal_before(&master.calendar_id, &master.file_name)];
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
-        let result = match scope {
-            EditScope::This => store
-                .exclude_occurrence(&master.calendar_id, &master.uid, instant)
-                .map(|()| false),
-            EditScope::Following => {
-                store.truncate_series(&master.calendar_id, &master.uid, instant)
-            }
-            EditScope::All => store
-                .delete(&master.calendar_id, &master.uid)
-                .map(|()| true),
-        };
+        let root = store.root().to_path_buf();
+        // Whatever the scope leaves of the file is sent as it is: the master
+        // with a new EXDATE or UNTIL, or — the series deleted — a deletion,
+        // unless other records shared the file and it is still there.
+        let touched = [(master.calendar_id.as_str(), master.file_name.as_str())];
+        let written = save_queued(&root, &touched, || match scope {
+            EditScope::This => store.exclude_occurrence(&master.calendar_id, &master.uid, instant),
+            EditScope::Following => store
+                .truncate_series(&master.calendar_id, &master.uid, instant)
+                .map(|_| ()),
+            EditScope::All => store.delete(&master.calendar_id, &master.uid),
+        });
 
-        match result {
-            Ok(deleted_whole) => {
-                let queued = if deleted_whole {
-                    // Gone locally; tell the server too — or, if the file
-                    // held other records, send what is left of it.
-                    self.store.as_ref().map_or(Ok(()), |store| {
-                        queue_writeback_removal(
-                            store,
-                            &master.calendar_id,
-                            &master.file_name,
-                            base.as_deref(),
-                        )
-                    })
-                } else {
-                    // The master changed (EXDATE or UNTIL); push the new revision.
-                    queue_writeback_file(&master.calendar_id, &master.file_name, base.as_deref())
-                };
+        match written {
+            Ok((Ok(()), queued)) => {
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
                 self.report_unqueued(queued)
+            }
+            Ok((Err(why), queued)) => {
+                self.report_failed(&format!("{}: {why}", fl!("error-delete-event")), queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-delete-event"))),
         }
@@ -5024,34 +5001,33 @@ impl AppModel {
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
-        let base = writeback_base(store, &original.calendar_id, &original.file_name);
+        let root = store.root().to_path_buf();
 
         // Deleting an override removes just that component — the series and
         // its master stay, and the master's generated instance returns.
-        // Deleting anything else removes the file, series included.
-        let result = if original.recurrence_id.is_some() {
-            store.delete_override(&original)
-        } else {
-            store.delete(&original.calendar_id, &original.uid)
-        };
+        // Deleting anything else removes the file, series included. The file
+        // is queued as it is left: an override's removal leaves its series
+        // there, which is sent as it now is — deleting the resource would
+        // delete the whole series on the server.
+        let touched = [(original.calendar_id.as_str(), original.file_name.as_str())];
+        let written = save_queued(&root, &touched, || {
+            if original.recurrence_id.is_some() {
+                store.delete_override(&original)
+            } else {
+                store.delete(&original.calendar_id, &original.uid)
+            }
+        });
 
-        match result {
-            Ok(()) => {
-                // After the local change, and shaped by it: an override's
-                // removal leaves its series in the file, which must be sent
-                // as it now is — deleting the resource would delete the
-                // whole series on the server.
-                let queued = queue_writeback_removal(
-                    store,
-                    &original.calendar_id,
-                    &original.file_name,
-                    base.as_deref(),
-                );
+        match written {
+            Ok((Ok(()), queued)) => {
                 self.journal_finish(journal);
                 self.editor = None;
                 self.core.window.show_context = false;
                 self.reload();
                 self.report_unqueued(queued)
+            }
+            Ok((Err(why), queued)) => {
+                self.report_failed(&format!("{}: {why}", fl!("error-delete-event")), queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-delete-event"))),
         }
@@ -5076,20 +5052,39 @@ impl AppModel {
         let Some(store) = self.store.as_mut() else {
             return Task::none();
         };
+        let root = store.root().to_path_buf();
 
-        match store.import_ics(&text, &calendar_id) {
-            Ok(summary) if summary.total() == 0 => {
+        // Imported events are local changes like any other: into a
+        // CalDAV-bound calendar they must be queued, or the server never sees
+        // them and the next sync treats them as strays. An event already here
+        // is imported over its own file, which is locked and queued with the
+        // import; a new one gets a file the import names, queued after it.
+        let held: Vec<String> = cosmic_pim_core::ical::parse_ics(&text, &calendar_id, "")
+            .iter()
+            .filter_map(|event| store.event(&calendar_id, &event.uid).ok().flatten())
+            .map(|event| event.file_name)
+            .collect();
+        let touched: Vec<(&str, &str)> = held
+            .iter()
+            .map(|file| (calendar_id.as_str(), file.as_str()))
+            .collect();
+        let imported = match save_queued(&root, &touched, || store.import_ics(&text, &calendar_id))
+        {
+            Ok((imported, queued)) => imported.map(|summary| (summary, queued)),
+            Err(why) => return self.toast_error(&why.to_string()),
+        };
+
+        match imported {
+            Ok((summary, _)) if summary.total() == 0 => {
                 self.toast_error(&fl!("import-empty", path = file_label(path)))
             }
-            Ok(summary) => {
-                // Imported events are local changes like any other: into a
-                // CalDAV-bound calendar they must be queued, or the server
-                // never sees them and the next sync treats them as strays.
+            Ok((summary, queued)) => {
                 let queued = summary
                     .files
                     .iter()
-                    .map(|file| queue_writeback_file(&calendar_id, file, None))
-                    .fold(Ok(()), Result::and);
+                    .filter(|file| !held.contains(file))
+                    .map(|file| queue_after(&root, &calendar_id, file, true))
+                    .fold(queued, Result::and);
                 self.reload();
                 let done = self.toast(&fl!(
                     "import-done",
@@ -5109,6 +5104,19 @@ impl AppModel {
             Ok(()) => Task::none(),
             Err(why) => self.toast_error(&fl!("error-not-queued", reason = why)),
         }
+    }
+
+    /// A change that failed, and whether what it did leave on disk is on its
+    /// way to the server. See [`save_queued`].
+    fn report_failed(
+        &mut self,
+        why: &dyn std::fmt::Display,
+        queued: Queued,
+    ) -> Task<cosmic::Action<Message>> {
+        Task::batch([
+            self.toast_error(&why.to_string()),
+            self.report_unqueued(queued),
+        ])
     }
 
     fn toast(&mut self, message: &str) -> Task<cosmic::Action<Message>> {
@@ -5395,31 +5403,149 @@ fn sleep_subscription() -> Subscription<Message> {
 /// stays on this computer, so it is reported rather than logged.
 type Queued = Result<(), String>;
 
-/// Queues a written file for upload to its CalDAV server, if it has one.
+/// Makes a local change and queues it for upload, as one step
+/// (`cosmic_pim_sync::save_and_queue`).
 ///
-/// `base` is the file's bytes from *before* this session's edit; with it, the
-/// push queue can three-way-merge a concurrent server-side change instead of
-/// recording a conflict. `None` (new file, or the read failed) degrades to
-/// the plain no-merge queue.
-fn queue_writeback_file(calendar_id: &str, file_name: &str, base: Option<&str>) -> Queued {
-    let root = crate::store::vdir::default_root();
-    cosmic_pim_sync::queue_save_with_base(&root, calendar_id, file_name, base)
-        .map(|_| ())
-        .map_err(|why| {
-            tracing::warn!(calendar = calendar_id, file = file_name, %why, "could not queue the change for upload");
-            why.to_string()
-        })
+/// `write` is the change. `touched` names every file it may change, create
+/// or remove, as `(calendar id, file name)`. Each calendar named is locked for
+/// the whole write, so a sync pass can neither pull one of those files
+/// between the write and its enqueue (and put the server's copy over the
+/// edit) nor miss the edit. When `write` returns, each file is queued as it
+/// was left: uploaded if it is there, deleted on the server if it is gone —
+/// which is also what a removed override or task that shared its file needs,
+/// since the file stays and is sent as it now is (audit F-29).
+///
+/// A change across two calendars (a move) holds both locks at once, taken in
+/// [`lock_order`], so two moves in opposite directions — here and in another
+/// app — cannot each hold one lock while waiting for the other (audit F-30).
+///
+/// What `write` returned comes back as it was, and the files are queued
+/// whatever it was: a move that failed half way leaves two changed files,
+/// and both must reach the server.
+///
+/// # Errors
+///
+/// When a calendar's sync state could not be opened or locked. `write` did
+/// not run, and nothing changed.
+fn save_queued<T, E>(
+    root: &std::path::Path,
+    touched: &[(&str, &str)],
+    write: impl FnOnce() -> Result<T, E>,
+) -> Result<(Result<T, E>, Queued), cosmic_pim_sync::Error> {
+    locked(root, &lock_order(touched), write)
 }
 
-/// Queues a removed file's deletion on its CalDAV server, if it had one.
-fn queue_writeback_delete_file(calendar_id: &str, file_name: &str) -> Queued {
-    let root = crate::store::vdir::default_root();
-    cosmic_pim_sync::queue_delete(&root, calendar_id, file_name)
-        .map(|_| ())
-        .map_err(|why| {
-            tracing::warn!(calendar = calendar_id, file = file_name, %why, "could not queue the deletion for upload");
-            why.to_string()
-        })
+/// `touched` grouped by calendar, in the order the calendars are locked:
+/// by id. Every process that locks two calendars must take them in one order,
+/// and the id is the order every process can agree on without asking.
+fn lock_order<'a>(touched: &[(&'a str, &'a str)]) -> Vec<(&'a str, Vec<&'a str>)> {
+    let mut groups: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for &(calendar_id, file_name) in touched {
+        let files = groups.entry(calendar_id).or_default();
+        if !files.contains(&file_name) {
+            files.push(file_name);
+        }
+    }
+    groups.into_iter().collect()
+}
+
+/// Runs `write` inside every group's lock, the first group outermost, and
+/// queues each group's files on the way out.
+fn locked<T, E>(
+    root: &std::path::Path,
+    groups: &[(&str, Vec<&str>)],
+    write: impl FnOnce() -> Result<T, E>,
+) -> Result<(Result<T, E>, Queued), cosmic_pim_sync::Error> {
+    let Some(((calendar_id, files), rest)) = groups.split_first() else {
+        return Ok((write(), Ok(())));
+    };
+    let saved =
+        cosmic_pim_sync::save_and_queue(root, calendar_id, files, || locked(root, rest, write))?;
+    let (written, inner) = saved.value;
+    Ok((written, inner.and(queued(calendar_id, saved.queued))))
+}
+
+/// A queueing outcome, worded for the user.
+fn queued(calendar_id: &str, outcome: cosmic_pim_sync::Result<bool>) -> Queued {
+    outcome.map(|_| ()).map_err(|why| {
+        tracing::warn!(calendar = calendar_id, %why, "could not queue the change for upload");
+        why.to_string()
+    })
+}
+
+/// Queues a file a write named only once it had run — one `itip::apply` or
+/// an import created — for upload, or its removal.
+///
+/// A second step, where [`save_queued`] makes it one, because a file whose
+/// name the write chose cannot be locked beforehand. It leaves nothing to
+/// lose: a sync pass only writes what the server has, and the server has
+/// never had a file this device just created.
+fn queue_after(root: &std::path::Path, calendar_id: &str, file_name: &str, exists: bool) -> Queued {
+    let outcome = if exists {
+        cosmic_pim_sync::queue_save(root, calendar_id, file_name)
+    } else {
+        cosmic_pim_sync::queue_delete(root, calendar_id, file_name)
+    };
+    queued(calendar_id, outcome)
+}
+
+/// The file in `calendar_id` holding the event `uid`, by the store's index,
+/// read afresh: what an iTIP payload for `uid` will change.
+fn file_holding(store: &mut Store, calendar_id: &str, uid: &str) -> Option<String> {
+    if let Err(why) = store.refresh() {
+        tracing::warn!(%why, "could not reread the calendars before applying an invitation");
+    }
+    match store.event(calendar_id, uid) {
+        Ok(event) => event.map(|event| event.file_name),
+        Err(why) => {
+            tracing::warn!(uid, %why, "could not look up the event an invitation names");
+            None
+        }
+    }
+}
+
+/// Applies an iTIP payload to `meta` with `apply`, and queues what it
+/// changed.
+///
+/// The file already holding `uid` is locked and queued with the write
+/// ([`save_queued`]). A payload that creates the event writes a file whose
+/// name `itip::apply` picks, and that file is queued right after
+/// ([`queue_after`]); so is any file the payload changed that the index did
+/// not name.
+fn apply_itip_queued(
+    store: &mut Store,
+    meta: &CalendarMeta,
+    uid: &str,
+    apply: impl FnOnce() -> cosmic_pim_caldav::Result<cosmic_pim_caldav::itip::Outcome>,
+) -> Result<
+    (
+        cosmic_pim_caldav::Result<cosmic_pim_caldav::itip::Outcome>,
+        Queued,
+    ),
+    cosmic_pim_sync::Error,
+> {
+    use cosmic_pim_caldav::itip::Outcome;
+
+    let held = file_holding(store, &meta.id, uid);
+    let root = store.root().to_path_buf();
+    let touched: Vec<(&str, &str)> = held
+        .iter()
+        .map(|file| (meta.id.as_str(), file.as_str()))
+        .collect();
+    let (outcome, mut queued) = save_queued(&root, &touched, apply)?;
+    if let Ok(outcome) = &outcome {
+        let file = match outcome {
+            Outcome::Cancelled { file } => Some(file.as_str()),
+            other => other.file(),
+        };
+        if let Some(file) = file
+            && Some(file) != held.as_deref()
+        {
+            let exists = meta.path.join(file).exists();
+            queued = queued.and(queue_after(&root, &meta.id, file, exists));
+        }
+    }
+    Ok((outcome, queued))
 }
 
 /// Reads every contact from the suite's address books, for birthday display.
@@ -5434,9 +5560,9 @@ fn load_contact_cards() -> Vec<crate::model::Contact> {
         .collect()
 }
 
-/// The event file's bytes as they are right now — captured *before* a save,
-/// they are the base a three-way writeback merge needs.
-fn writeback_base(store: &Store, calendar_id: &str, file_name: &str) -> Option<String> {
+/// A calendar file's bytes as they are right now: an undo step's "before"
+/// when read ahead of a change, its "after" once the change is made.
+fn file_bytes(store: &Store, calendar_id: &str, file_name: &str) -> Option<String> {
     let meta = store.calendar(calendar_id)?;
     std::fs::read_to_string(meta.path.join(file_name)).ok()
 }
@@ -5533,45 +5659,6 @@ fn own_wall_clock(t: crate::model::EventTime) -> NaiveDateTime {
     match t {
         EventTime::Date(d) => d.and_time(NaiveTime::MIN),
         EventTime::Floating(dt) | EventTime::Zoned(dt, _) => dt,
-    }
-}
-
-/// What the server needs after a record left a file.
-#[derive(Debug, PartialEq, Eq)]
-enum Removal {
-    /// The file is gone: delete the resource.
-    Delete,
-    /// Other components still live in the file — a removed override leaves
-    /// its series, a removed task can leave its siblings — so the resource
-    /// is rewritten, not deleted.
-    Rewrite,
-}
-
-/// Which [`Removal`] a record's departure from `file` calls for, judged from
-/// what the local change left on disk.
-fn removal_after(file: &std::path::Path) -> Removal {
-    if file.exists() {
-        Removal::Rewrite
-    } else {
-        Removal::Delete
-    }
-}
-
-/// Queues what the server needs after a record left `file_name` in
-/// `calendar_id` — deleted, or moved to another calendar. `base` is the
-/// file's bytes before the change, for the writeback merge.
-fn queue_writeback_removal(
-    store: &Store,
-    calendar_id: &str,
-    file_name: &str,
-    base: Option<&str>,
-) -> Queued {
-    let Some(meta) = store.calendar(calendar_id) else {
-        return Ok(());
-    };
-    match removal_after(&meta.path.join(file_name)) {
-        Removal::Delete => queue_writeback_delete_file(calendar_id, file_name),
-        Removal::Rewrite => queue_writeback_file(calendar_id, file_name, base),
     }
 }
 
@@ -5895,41 +5982,214 @@ mod tests {
         assert_eq!(series.exdates, vec![at(2026, 8, 11, 9, 0)]);
     }
 
-    #[test]
-    fn deleting_one_changed_instance_rewrites_the_series_instead_of_deleting_it() {
-        use crate::model::EventTime;
+    /// A store in a temporary directory.
+    fn temp_store() -> (tempfile::TempDir, Store) {
         let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(
+        let store = Store::open(
             &dir.path().join("calendars"),
             &dir.path().join("index.sqlite"),
         )
         .unwrap();
-        let calendar = store.create_calendar("Work", PALETTE[0]).unwrap();
-        let local = store.local_timezone();
+        (dir, store)
+    }
 
-        let mut series = crate::model::Event::draft(&calendar.id, at(2026, 8, 4, 9, 0), local);
-        series.summary = "Standup".into();
-        series.rrule = Some("FREQ=WEEKLY".into());
-        store.save(&series).unwrap();
-        // The 11 Aug instance, moved to 10:00: an override in the same file.
-        let mut moved = series.clone();
-        moved.rrule = None;
-        moved.recurrence_id = Some(EventTime::Zoned(at(2026, 8, 11, 9, 0), local));
-        moved.start = EventTime::Zoned(at(2026, 8, 11, 10, 0), local);
-        moved.end = EventTime::Zoned(at(2026, 8, 11, 11, 0), local);
-        store.save(&moved).unwrap();
+    /// A calendar bound to a CalDAV collection, so its changes are queued.
+    fn synced_calendar(store: &mut Store, name: &str) -> CalendarMeta {
+        let meta = store.create_calendar(name, PALETTE[0]).unwrap();
+        cosmic_pim_caldav::VdirStore::open(meta.clone())
+            .unwrap()
+            .set_remote(&format!("/dav/{}/", meta.id), false)
+            .unwrap();
+        meta
+    }
 
-        store.delete_override(&moved).unwrap();
-        assert_eq!(
-            removal_after(&calendar.path.join(&series.file_name)),
-            Removal::Rewrite,
-            "a DELETE here would remove the whole series from the server"
+    /// `ics` as the server's copy of `file` in `calendar`, as a sync pass
+    /// leaves it.
+    fn pulled(store: &mut Store, calendar: &CalendarMeta, file: &str, ics: &str) {
+        use cosmic_pim_caldav::CalDavStore as _;
+        cosmic_pim_caldav::VdirStore::open(calendar.clone())
+            .unwrap()
+            .upsert(&cosmic_pim_caldav::RemoteEvent {
+                href: format!("/dav/{}/{file}", calendar.id),
+                etag: "\"1\"".into(),
+                ics: ics.into(),
+            })
+            .unwrap();
+        store.refresh().unwrap();
+    }
+
+    /// What `calendar` has queued for its server.
+    fn pending(calendar: &CalendarMeta) -> Vec<cosmic_pim_caldav::push::PushOp> {
+        use cosmic_pim_caldav::push::PushQueue as _;
+        cosmic_pim_caldav::VdirStore::open(calendar.clone())
+            .unwrap()
+            .pending()
+            .unwrap()
+            .into_iter()
+            .map(|push| push.op)
+            .collect()
+    }
+
+    /// A weekly series with its 11 Aug instance moved to 10:00, in one file.
+    const SERIES_WITH_A_CHANGED_INSTANCE: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n\
+        PRODID:-//Other//EN\r\n\
+        BEGIN:VEVENT\r\nUID:standup\r\nDTSTAMP:20260801T000000Z\r\n\
+        DTSTART:20260804T090000Z\r\nDTEND:20260804T093000Z\r\n\
+        RRULE:FREQ=WEEKLY\r\nSUMMARY:Standup\r\nEND:VEVENT\r\n\
+        BEGIN:VEVENT\r\nUID:standup\r\nDTSTAMP:20260801T000000Z\r\n\
+        RECURRENCE-ID:20260811T090000Z\r\n\
+        DTSTART:20260811T100000Z\r\nDTEND:20260811T103000Z\r\n\
+        SUMMARY:Standup (demo)\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+    fn eleventh_at_nine() -> chrono::DateTime<chrono::Utc> {
+        at(2026, 8, 11, 9, 0).and_utc()
+    }
+
+    #[test]
+    fn deleting_one_changed_instance_sends_the_series_instead_of_deleting_it() {
+        use cosmic_pim_caldav::push::PushOp;
+        let (_dir, mut store) = temp_store();
+        let calendar = synced_calendar(&mut store, "Work");
+        pulled(
+            &mut store,
+            &calendar,
+            "standup.ics",
+            SERIES_WITH_A_CHANGED_INSTANCE,
+        );
+        let changed = store
+            .event_instance(&calendar.id, "standup", Some(eleventh_at_nine()))
+            .unwrap()
+            .unwrap();
+        assert!(changed.recurrence_id.is_some());
+        let root = store.root().to_path_buf();
+        let touched = [(calendar.id.as_str(), changed.file_name.as_str())];
+
+        let (written, queued) =
+            save_queued(&root, &touched, || store.delete_override(&changed)).unwrap();
+        written.unwrap();
+        queued.unwrap();
+        assert!(
+            matches!(pending(&calendar)[..], [PushOp::Put { .. }]),
+            "a DELETE here would remove the whole series from the server: {:?}",
+            pending(&calendar)
         );
 
-        store.delete(&calendar.id, &series.uid).unwrap();
+        let (written, queued) =
+            save_queued(&root, &touched, || store.delete(&calendar.id, "standup")).unwrap();
+        written.unwrap();
+        queued.unwrap();
+        assert!(
+            matches!(pending(&calendar)[..], [PushOp::Delete { .. }]),
+            "{:?}",
+            pending(&calendar)
+        );
+    }
+
+    #[test]
+    fn a_move_between_synced_calendars_is_queued_at_both_ends() {
+        use cosmic_pim_caldav::push::PushOp;
+        let (_dir, mut store) = temp_store();
+        let home = synced_calendar(&mut store, "Home");
+        let work = synced_calendar(&mut store, "Work");
+        pulled(
+            &mut store,
+            &home,
+            "standup.ics",
+            SERIES_WITH_A_CHANGED_INSTANCE,
+        );
+        let series = store.event(&home.id, "standup").unwrap().unwrap();
+        let root = store.root().to_path_buf();
+        let touched = [
+            (work.id.as_str(), series.file_name.as_str()),
+            (home.id.as_str(), series.file_name.as_str()),
+        ];
+
+        let (written, queued) = save_queued(&root, &touched, || {
+            store.move_to_calendar(&series, &work.id)
+        })
+        .unwrap();
+        written.unwrap();
+        queued.unwrap();
+        assert!(
+            matches!(pending(&home)[..], [PushOp::Delete { .. }]),
+            "the old calendar's server would bring it back: {:?}",
+            pending(&home)
+        );
+        assert!(
+            matches!(pending(&work)[..], [PushOp::Put { .. }]),
+            "{:?}",
+            pending(&work)
+        );
+    }
+
+    #[test]
+    fn an_invitation_is_queued_whether_it_updates_or_creates() {
+        use cosmic_pim_caldav::itip::{Outcome, apply};
+        use cosmic_pim_caldav::push::PushOp;
+        let request = |uid: &str, sequence: u32| {
+            format!(
+                "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:{uid}\r\n\
+                 DTSTAMP:20260801T000000Z\r\nSEQUENCE:{sequence}\r\nSUMMARY:Review\r\n\
+                 DTSTART:20260804T090000Z\r\nDTEND:20260804T100000Z\r\n\
+                 ORGANIZER:mailto:boss@example.com\r\nATTENDEE:mailto:me@example.com\r\n\
+                 END:VEVENT\r\nEND:VCALENDAR\r\n"
+            )
+        };
+        let (_dir, mut store) = temp_store();
+        let calendar = synced_calendar(&mut store, "Work");
+        // The organizer's first revision, already on the server.
+        pulled(
+            &mut store,
+            &calendar,
+            "review.ics",
+            &cosmic_pim_caldav::itip::strip_method(&request("review", 0)),
+        );
+
+        let update = request("review", 1);
+        let (outcome, queued) = apply_itip_queued(&mut store, &calendar, "review", || {
+            apply(&calendar.path, &update, "me@example.com", None)
+        })
+        .unwrap();
+        assert!(
+            matches!(outcome, Ok(Outcome::Updated { .. })),
+            "{outcome:?}"
+        );
+        queued.unwrap();
+        assert!(
+            matches!(&pending(&calendar)[..], [PushOp::Put { file, .. }] if file == "review.ics"),
+            "{:?}",
+            pending(&calendar)
+        );
+
+        // A new one lands in a file itip::apply names, queued after it.
+        let new = request("planning", 0);
+        let (outcome, queued) = apply_itip_queued(&mut store, &calendar, "planning", || {
+            apply(&calendar.path, &new, "me@example.com", None)
+        })
+        .unwrap();
+        let Ok(Outcome::Created { file }) = outcome else {
+            panic!("{outcome:?}");
+        };
+        queued.unwrap();
+        assert!(
+            pending(&calendar)
+                .iter()
+                .any(|op| matches!(op, PushOp::Put { file: queued, .. } if *queued == file)),
+            "{:?}",
+            pending(&calendar)
+        );
+    }
+
+    #[test]
+    fn calendars_are_locked_in_the_order_of_their_ids() {
+        let expected = vec![("a", vec!["y.ics"]), ("b", vec!["x.ics"])];
+        assert_eq!(lock_order(&[("b", "x.ics"), ("a", "y.ics")]), expected);
+        assert_eq!(lock_order(&[("a", "y.ics"), ("b", "x.ics")]), expected);
+        // One calendar named twice is one lock: it is not re-entrant, and a
+        // second hold would wait on the first for ever.
         assert_eq!(
-            removal_after(&calendar.path.join(&series.file_name)),
-            Removal::Delete
+            lock_order(&[("a", "x.ics"), ("a", "x.ics"), ("a", "y.ics")]),
+            vec![("a", vec!["x.ics", "y.ics"])]
         );
     }
 

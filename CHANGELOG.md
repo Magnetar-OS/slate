@@ -21,6 +21,11 @@ All notable user-facing changes to Slate. The format follows
   clock, where that one landed in the skipped hour and never fired. A
   reminder whole days ahead of an event across a clock change now comes an
   hour earlier or later on the wall clock than before.
+- A change saved while a sync was running can no longer be overwritten by
+  the server's copy. The change and its place in the upload queue are now
+  made as one step, where a sync could land between the two, find the
+  change not yet queued and replace it. Moving an event between two synced
+  calendars is one such step for both of them.
 - Adding, changing or removing a reminder on an event that already exists is
   saved. The editor accepted the change and the save dropped it.
 - Moving a repeating event to another calendar takes its changed occurrences

@@ -5,6 +5,8 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-09-30
+
 ### Changed
 
 - Built against cosmic-pim 2.2.
@@ -318,7 +320,8 @@ All notable user-facing changes to Slate. The format follows
   own writes (contacts, accounts, cache index).
 - Keyboard shortcuts work on non-Latin keyboard layouts.
 
-[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/Magnetar-OS/slate/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/Magnetar-OS/slate/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/Magnetar-OS/slate/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/Magnetar-OS/slate/compare/v1.0.1...v1.1.0

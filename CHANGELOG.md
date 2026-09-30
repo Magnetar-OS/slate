@@ -7,6 +7,7 @@ All notable user-facing changes to Slate. The format follows
 
 ### Changed
 
+- Rebuilt against the current COSMIC libraries (libcosmic `6af8b70`).
 - Built against cosmic-pim 2.1 and the current COSMIC libraries (libcosmic
   `6af8b70`).
 

@@ -5,6 +5,22 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Built against cosmic-pim 2.2.
+
+### Fixed
+
+- A reminder set whole days before an event ("1 day before") fires at the
+  event's time of day again when a clock change falls in between: 09:00 the
+  day before a 09:00 event, not 08:00 or 10:00. 1.2.1 counted those days as
+  exact 24-hour spans. A reminder set in hours ("24 hours before") is still
+  exact. For an event with a time zone, the days are counted in that zone.
+- An imported event or a new invitation is written and queued for upload
+  in one step, under the calendar's lock, like every other change. Its new
+  file used to be queued in a second step, and an import of only new
+  events took no lock at all.
+
 ## [1.2.1] - 2026-09-30
 
 ### Changed

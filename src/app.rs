@@ -5049,19 +5049,21 @@ impl AppModel {
         // Imported events are local changes like any other: into a
         // CalDAV-bound calendar they must be queued, or the server never sees
         // them and the next sync treats them as strays. An event already here
-        // is imported over its own file, which is locked and queued with the
-        // import; a new one gets a file the import names, queued after it.
+        // is imported over its own file; a new one gets a file the import
+        // names. Both are queued with the import, under the calendar's lock.
         let held: Vec<String> = cosmic_pim_core::ical::parse_ics(&text, &calendar_id, "")
             .iter()
             .filter_map(|event| store.event(&calendar_id, &event.uid).ok().flatten())
             .map(|event| event.file_name)
             .collect();
-        let touched: Vec<(&str, &str)> = held
-            .iter()
-            .map(|file| (calendar_id.as_str(), file.as_str()))
-            .collect();
-        let imported = match save_queued(&root, &touched, || store.import_ics(&text, &calendar_id))
-        {
+        let held: Vec<&str> = held.iter().map(String::as_str).collect();
+        let imported = match save_creating(
+            &root,
+            &calendar_id,
+            &held,
+            || store.import_ics(&text, &calendar_id),
+            |summary| summary.files.clone(),
+        ) {
             Ok((imported, queued)) => imported.map(|summary| (summary, queued)),
             Err(why) => return self.toast_error(&why.to_string()),
         };
@@ -5071,12 +5073,6 @@ impl AppModel {
                 self.toast_error(&fl!("import-empty", path = file_label(path)))
             }
             Ok((summary, queued)) => {
-                let queued = summary
-                    .files
-                    .iter()
-                    .filter(|file| !held.contains(file))
-                    .map(|file| queue_after(&root, &calendar_id, file, true))
-                    .fold(queued, Result::and);
                 self.reload();
                 let done = self.toast(&fl!(
                     "import-done",
@@ -5465,20 +5461,34 @@ fn queued(calendar_id: &str, outcome: cosmic_pim_sync::Result<bool>) -> Queued {
     })
 }
 
-/// Queues a file a write named only once it had run — one `itip::apply` or
-/// an import created — for upload, or its removal.
+/// Makes a local change in one calendar that may create files whose names
+/// it picks as it writes — an import, an `itip::apply` — and queues it for
+/// upload with them, as one step
+/// (`cosmic_pim_sync::save_and_queue_creating`).
 ///
-/// A second step, where [`save_queued`] makes it one, because a file whose
-/// name the write chose cannot be locked beforehand. It leaves nothing to
-/// lose: a sync pass only writes what the server has, and the server has
-/// never had a file this device just created.
-fn queue_after(root: &std::path::Path, calendar_id: &str, file_name: &str, exists: bool) -> Queued {
-    let outcome = if exists {
-        cosmic_pim_sync::queue_save(root, calendar_id, file_name)
-    } else {
-        cosmic_pim_sync::queue_delete(root, calendar_id, file_name)
-    };
-    queued(calendar_id, outcome)
+/// `held` names the files that exist already and `write` may change, as
+/// [`save_queued`]'s `touched` does. `created` reads, from what `write`
+/// returned, every file it wrote; those not in `held` are queued under the
+/// same lock, uploaded if they are there and deleted on the server if the
+/// server has them and they are gone. A `write` that failed names none.
+///
+/// # Errors
+///
+/// When the calendar's sync state could not be opened or locked. `write` did
+/// not run, and nothing changed.
+fn save_creating<T, E>(
+    root: &std::path::Path,
+    calendar_id: &str,
+    held: &[&str],
+    write: impl FnOnce() -> Result<T, E>,
+    created: impl FnOnce(&T) -> Vec<String>,
+) -> Result<(Result<T, E>, Queued), cosmic_pim_sync::Error> {
+    let saved = cosmic_pim_sync::save_and_queue_creating(root, calendar_id, held, || {
+        let written = write();
+        let names = written.as_ref().map(created).unwrap_or_default();
+        Ok::<_, cosmic_pim_sync::Error>((written, names))
+    })?;
+    Ok((saved.value, queued(calendar_id, saved.queued)))
 }
 
 /// The file in `calendar_id` holding the event `uid`, by the store's index,
@@ -5497,13 +5507,12 @@ fn file_holding(store: &mut Store, calendar_id: &str, uid: &str) -> Option<Strin
 }
 
 /// Applies an iTIP payload to `meta` with `apply`, and queues what it
-/// changed.
+/// changed, as one step ([`save_creating`]).
 ///
-/// The file already holding `uid` is locked and queued with the write
-/// ([`save_queued`]). A payload that creates the event writes a file whose
-/// name `itip::apply` picks, and that file is queued right after
-/// ([`queue_after`]); so is any file the payload changed that the index did
-/// not name.
+/// The file already holding `uid` is kept from before the write and queued
+/// if the write changed it. A payload that creates the event writes a file
+/// whose name `itip::apply` picks, and that file is queued with it; so is
+/// any file the payload changed that the index did not name.
 fn apply_itip_queued(
     store: &mut Store,
     meta: &CalendarMeta,
@@ -5520,24 +5529,14 @@ fn apply_itip_queued(
 
     let held = file_holding(store, &meta.id, uid);
     let root = store.root().to_path_buf();
-    let touched: Vec<(&str, &str)> = held
-        .iter()
-        .map(|file| (meta.id.as_str(), file.as_str()))
-        .collect();
-    let (outcome, mut queued) = save_queued(&root, &touched, apply)?;
-    if let Ok(outcome) = &outcome {
+    let held: Vec<&str> = held.as_deref().into_iter().collect();
+    save_creating(&root, &meta.id, &held, apply, |outcome| {
         let file = match outcome {
             Outcome::Cancelled { file } => Some(file.as_str()),
             other => other.file(),
         };
-        if let Some(file) = file
-            && Some(file) != held.as_deref()
-        {
-            let exists = meta.path.join(file).exists();
-            queued = queued.and(queue_after(&root, &meta.id, file, exists));
-        }
-    }
-    Ok((outcome, queued))
+        file.map(str::to_owned).into_iter().collect()
+    })
 }
 
 /// Reads every contact from the suite's address books, for birthday display.
@@ -6240,7 +6239,7 @@ mod tests {
             pending(&calendar)
         );
 
-        // A new one lands in a file itip::apply names, queued after it.
+        // A new one lands in a file itip::apply names, queued with it.
         let new = request("planning", 0);
         let (outcome, queued) = apply_itip_queued(&mut store, &calendar, "planning", || {
             apply(&calendar.path, &new, "me@example.com", None)
@@ -6254,6 +6253,58 @@ mod tests {
             pending(&calendar)
                 .iter()
                 .any(|op| matches!(op, PushOp::Put { file: queued, .. } if *queued == file)),
+            "{:?}",
+            pending(&calendar)
+        );
+    }
+
+    /// Whether a process holds `calendar`'s sync lock right now.
+    fn sync_lock_is_held(calendar: &CalendarMeta) -> bool {
+        std::fs::read_dir(&calendar.path)
+            .unwrap()
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".lock"))
+            .any(|entry| {
+                matches!(
+                    std::fs::File::open(entry.path()).unwrap().try_lock(),
+                    Err(std::fs::TryLockError::WouldBlock)
+                )
+            })
+    }
+
+    #[test]
+    fn an_import_writes_and_queues_its_new_files_inside_the_calendars_lock() {
+        // A new event's file is named by the import, so it could not be
+        // locked beforehand: it was queued in a second step, and with no
+        // existing event to hold, the import ran with no lock at all, where
+        // a sync pass could pull between the write and the enqueue.
+        use cosmic_pim_caldav::push::PushOp;
+        let (_dir, mut store) = temp_store();
+        let calendar = synced_calendar(&mut store, "Work");
+        let root = store.root().to_path_buf();
+        let ics = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Other//EN\r\n\
+                   BEGIN:VEVENT\r\nUID:planning\r\nDTSTAMP:20260801T000000Z\r\n\
+                   DTSTART:20260804T090000Z\r\nDTEND:20260804T100000Z\r\n\
+                   SUMMARY:Planning\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+
+        let mut locked = false;
+        let (imported, queued) = save_creating(
+            &root,
+            &calendar.id,
+            &[],
+            || {
+                locked = sync_lock_is_held(&calendar);
+                store.import_ics(ics, &calendar.id)
+            },
+            |summary| summary.files.clone(),
+        )
+        .unwrap();
+        let summary = imported.unwrap();
+        queued.unwrap();
+        assert!(locked, "the import ran outside the calendar's lock");
+        assert_eq!(summary.added, 1);
+        assert!(
+            matches!(&pending(&calendar)[..], [PushOp::Put { file, .. }] if summary.files.contains(file)),
             "{:?}",
             pending(&calendar)
         );

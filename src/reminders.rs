@@ -13,7 +13,7 @@
 
 use crate::config::Config;
 use crate::fl;
-use crate::model::{Alarm, EventTime, Occurrence};
+use crate::model::{Alarm, EventTime, Occurrence, Trigger};
 use crate::store::Store;
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use chrono_tz::Tz;
@@ -31,9 +31,11 @@ pub struct ReminderId {
     pub calendar_id: String,
     pub start: NaiveDateTime,
     /// When the alarm fires, in seconds from the occurrence's start, so two
-    /// alarms on one event stay distinct. For an alarm set from the start
-    /// this is its offset, as it always was; one set from the end or at a
-    /// fixed time counts from the start too.
+    /// alarms on one event stay distinct. For an alarm set from the start in
+    /// hours or minutes this is its offset, as it always was; one written in
+    /// days is its distance on that occurrence (23 or 25 hours for a day that
+    /// crosses a clock change), and one set from the end or at a fixed time
+    /// counts from the start too.
     pub offset_secs: i64,
 }
 
@@ -248,7 +250,7 @@ impl Scheduler {
     pub fn due(
         &mut self,
         occurrences: &[Occurrence],
-        alarms_for: impl Fn(&Occurrence) -> Vec<Alarm>,
+        alarms_for: impl Fn(&Occurrence) -> Alarms,
         local: Tz,
         now: NaiveDateTime,
         default_lead: impl Fn(&Occurrence) -> Option<Duration>,
@@ -336,6 +338,16 @@ impl Scheduler {
     }
 }
 
+/// An occurrence's alarms as its file writes them, and the wall clock whose
+/// days a trigger written in days counts on.
+#[derive(Clone, Debug, Default)]
+pub struct Alarms {
+    pub triggers: Vec<Trigger>,
+    /// The zone the event's times are written in, or `None` for a floating or
+    /// all-day event, whose days are the viewer's.
+    pub zone: Option<Tz>,
+}
+
 /// The alarms to fire for `occurrence`: its own, or — only when it has none of
 /// any kind — its calendar's default, or the app-wide one behind it. `None`
 /// when there is nothing to fire.
@@ -345,12 +357,15 @@ impl Scheduler {
 /// place (audit F-09).
 fn alarms_or_default(
     occurrence: &Occurrence,
-    alarms_for: impl Fn(&Occurrence) -> Vec<Alarm>,
+    alarms_for: impl Fn(&Occurrence) -> Alarms,
     default_lead: impl Fn(&Occurrence) -> Option<Duration>,
-) -> Option<Vec<Alarm>> {
+) -> Option<Alarms> {
     let alarms = alarms_for(occurrence);
-    if alarms.is_empty() {
-        return default_lead(occurrence).map(|lead| vec![Alarm::Start(-lead)]);
+    if alarms.triggers.is_empty() {
+        return default_lead(occurrence).map(|lead| Alarms {
+            triggers: vec![Trigger::new(Alarm::Start(-lead), 0)],
+            zone: alarms.zone,
+        });
     }
     Some(alarms)
 }
@@ -359,10 +374,14 @@ fn alarms_or_default(
 /// in seconds (what tells two alarms on one occurrence apart), and the
 /// trigger as wall clock in `local`, the zone occurrences are expressed in.
 ///
-/// The instant is [`Alarm::fires_at`]'s, worked out in UTC. On the wall
-/// clock alone an alarm an hour before an event just after the spring-forward
-/// change lands in the hour that does not exist and never fires, and a
-/// fixed-time alarm could not be placed at all.
+/// The instant is [`Trigger::fires_at`]'s. The days of an offset written in
+/// days are counted on the wall clock of the event's zone (the viewer's for
+/// a floating or all-day event), so "a day before" a 09:00 event fires at
+/// 09:00 the day before across a clock change too (RFC 5545 section 3.3.6);
+/// the rest of the offset is exact. On the wall clock alone an alarm an hour
+/// before an event just after the spring-forward change lands in the hour
+/// that does not exist and never fires, and a fixed-time alarm could not be
+/// placed at all.
 ///
 /// A fixed-time alarm (`Alarm::At`) is the same instant for every occurrence
 /// of a series. It is one reminder, so it belongs to the first occurrence
@@ -370,20 +389,23 @@ fn alarms_or_default(
 /// series would show one per day of the look-ahead, all at once.
 fn triggers(
     occurrence: &Occurrence,
-    alarms: &[Alarm],
+    alarms: &Alarms,
     occurrences: &[Occurrence],
     local: Tz,
 ) -> Vec<(i64, NaiveDateTime)> {
     let start = EventTime::Floating(occurrence.start).to_utc(local);
     let end = EventTime::Floating(occurrence.end).to_utc(local);
+    let zone = alarms.zone.unwrap_or(local);
+    let (zoned_start, zoned_end) = (start.with_timezone(&zone), end.with_timezone(&zone));
     alarms
+        .triggers
         .iter()
-        .filter(|alarm| match alarm {
-            Alarm::At(at) => owns_fixed_alarm(occurrence, *at, occurrences, local),
+        .filter(|trigger| match trigger.alarm {
+            Alarm::At(at) => owns_fixed_alarm(occurrence, at, occurrences, local),
             Alarm::Start(_) | Alarm::End(_) => true,
         })
-        .map(|alarm| {
-            let fires = alarm.fires_at(start, end);
+        .map(|trigger| {
+            let fires = trigger.fires_at(zoned_start, zoned_end);
             (
                 (fires - start).num_seconds(),
                 fires.with_timezone(&local).naive_local(),
@@ -418,16 +440,22 @@ fn owns_fixed_alarm(
 }
 
 /// Every alarm of the component behind `occurrence`, read from its file:
-/// those set from the start, from the end and at a fixed time. An empty list
-/// means it has none, and its calendar's default applies.
-fn alarms_of(store: &Store, occurrence: &Occurrence) -> Vec<Alarm> {
+/// those set from the start, from the end and at a fixed time, with the days
+/// each offset was written in, and the zone the event's start is written in.
+/// No triggers means it has none, and its calendar's default applies.
+fn alarms_of(store: &Store, occurrence: &Occurrence) -> Alarms {
     let Some(event) = instance(store, occurrence) else {
-        return Vec::new();
+        return Alarms::default();
     };
-    store.alarms(&event).unwrap_or_else(|why| {
+    let zone = match event.start {
+        EventTime::Zoned(_, zone) => Some(zone),
+        EventTime::Floating(_) | EventTime::Date(_) => None,
+    };
+    let triggers = store.triggers(&event).unwrap_or_else(|why| {
         tracing::warn!(uid = event.uid, %why, "could not read the event's alarms");
         Vec::new()
-    })
+    });
+    Alarms { triggers, zone }
 }
 
 /// How far ahead of today a sweep looks for events whose alarms are due.
@@ -676,7 +704,7 @@ pub async fn watch_owner(
 pub fn sweep_missed(
     scheduler: &mut Scheduler,
     occurrences: &[Occurrence],
-    alarms_for: impl Fn(&Occurrence) -> Vec<Alarm>,
+    alarms_for: impl Fn(&Occurrence) -> Alarms,
     local: Tz,
     slept_at: NaiveDateTime,
     now: NaiveDateTime,
@@ -927,12 +955,24 @@ mod tests {
         }
     }
 
-    fn ten_minutes_before(_: &Occurrence) -> Vec<Alarm> {
-        vec![Alarm::Start(Duration::minutes(-10))]
+    /// `alarms` with exact offsets — none written in days — on a floating
+    /// event.
+    fn exact(alarms: Vec<Alarm>) -> Alarms {
+        Alarms {
+            triggers: alarms
+                .into_iter()
+                .map(|alarm| Trigger::new(alarm, 0))
+                .collect(),
+            zone: None,
+        }
     }
 
-    fn no_alarms(_: &Occurrence) -> Vec<Alarm> {
-        Vec::new()
+    fn ten_minutes_before(_: &Occurrence) -> Alarms {
+        exact(vec![Alarm::Start(Duration::minutes(-10))])
+    }
+
+    fn no_alarms(_: &Occurrence) -> Alarms {
+        Alarms::default()
     }
 
     #[test]
@@ -1171,10 +1211,10 @@ mod tests {
         let mut scheduler = Scheduler::new();
         let events = [occurrence("Flight", at(9, 0))];
         let two = |_: &Occurrence| {
-            vec![
+            exact(vec![
                 Alarm::Start(Duration::minutes(-60)),
                 Alarm::Start(Duration::minutes(-10)),
-            ]
+            ])
         };
 
         assert_eq!(
@@ -1191,7 +1231,7 @@ mod tests {
     /// `from..to` in `local` one minute at a time.
     fn firing_minutes(
         events: &[Occurrence],
-        alarms: impl Fn(&Occurrence) -> Vec<Alarm>,
+        alarms: impl Fn(&Occurrence) -> Alarms,
         local: chrono_tz::Tz,
         from: NaiveDateTime,
         to: NaiveDateTime,
@@ -1213,7 +1253,7 @@ mod tests {
     fn an_alarm_from_the_end_fires_before_the_end() {
         // 09:00–10:00, reminded five minutes before it ends.
         let events = [occurrence("Exam", at(9, 0))];
-        let before_end = |_: &Occurrence| vec![Alarm::End(Duration::minutes(-5))];
+        let before_end = |_: &Occurrence| exact(vec![Alarm::End(Duration::minutes(-5))]);
         assert_eq!(
             firing_minutes(&events, before_end, UTC, at(8, 0), at(11, 0), |_| None),
             vec![at(9, 55)]
@@ -1223,7 +1263,7 @@ mod tests {
     #[test]
     fn a_fixed_time_alarm_fires_at_its_instant() {
         let events = [occurrence("Exam", at(9, 0))];
-        let fixed = |_: &Occurrence| vec![Alarm::At(at(7, 30).and_utc())];
+        let fixed = |_: &Occurrence| exact(vec![Alarm::At(at(7, 30).and_utc())]);
         assert_eq!(
             firing_minutes(&events, fixed, UTC, at(6, 0), at(11, 0), |_| None),
             vec![at(7, 30)]
@@ -1238,12 +1278,12 @@ mod tests {
         let events = [occurrence("Exam", at(9, 0))];
         let ten = |_: &Occurrence| Some(Duration::minutes(10));
 
-        let before_end = |_: &Occurrence| vec![Alarm::End(Duration::minutes(-5))];
+        let before_end = |_: &Occurrence| exact(vec![Alarm::End(Duration::minutes(-5))]);
         assert_eq!(
             firing_minutes(&events, before_end, UTC, at(8, 0), at(11, 0), ten),
             vec![at(9, 55)]
         );
-        let fixed = |_: &Occurrence| vec![Alarm::At(at(7, 30).and_utc())];
+        let fixed = |_: &Occurrence| exact(vec![Alarm::At(at(7, 30).and_utc())]);
         assert_eq!(
             firing_minutes(&events, fixed, UTC, at(6, 0), at(11, 0), ten),
             vec![at(7, 30)]
@@ -1261,7 +1301,7 @@ mod tests {
         let events: Vec<Occurrence> = (0..3)
             .map(|day| series(at(9, 0) + Duration::days(day)))
             .collect();
-        let fixed = |_: &Occurrence| vec![Alarm::At(at(8, 0).and_utc())];
+        let fixed = |_: &Occurrence| exact(vec![Alarm::At(at(8, 0).and_utc())]);
 
         let mut scheduler = Scheduler::new();
         let due = scheduler.due(&events, fixed, UTC, at(8, 0), |_| None);
@@ -1283,7 +1323,7 @@ mod tests {
         // comes, and the reminder never fired.
         let local = chrono_tz::Europe::Athens;
         let events = [occurrence("Early train", athens(2026, 3, 29, 4, 30))];
-        let hour = |_: &Occurrence| vec![Alarm::Start(Duration::hours(-1))];
+        let hour = |_: &Occurrence| exact(vec![Alarm::Start(Duration::hours(-1))]);
         assert_eq!(
             firing_minutes(
                 &events,
@@ -1304,13 +1344,13 @@ mod tests {
         let local = chrono_tz::Europe::Athens;
         let events = [occurrence("Meeting", athens(2026, 3, 29, 9, 0))];
         let fixed = |_: &Occurrence| {
-            vec![Alarm::At(
+            exact(vec![Alarm::At(
                 NaiveDate::from_ymd_opt(2026, 3, 29)
                     .unwrap()
                     .and_hms_opt(5, 30, 0)
                     .unwrap()
                     .and_utc(),
-            )]
+            )])
         };
         assert_eq!(
             firing_minutes(
@@ -1335,7 +1375,7 @@ mod tests {
             end: athens(2026, 10, 25, 5, 0),
             ..occurrence("Night shift", athens(2026, 10, 25, 2, 0))
         };
-        let before_end = |_: &Occurrence| vec![Alarm::End(Duration::hours(-3))];
+        let before_end = |_: &Occurrence| exact(vec![Alarm::End(Duration::hours(-3))]);
         assert_eq!(
             firing_minutes(
                 &[shift],
@@ -1350,17 +1390,40 @@ mod tests {
     }
 
     #[test]
-    fn a_days_lead_over_a_clock_change_is_twenty_four_hours() {
-        // What `Alarm::fires_at` means by an offset: an exact duration. A day
-        // before 09:00 on the first day of summer time is 08:00 the day
-        // before, not 09:00 — see the fix-run notes for the open question.
+    fn a_day_before_over_a_clock_change_is_the_same_time_the_day_before() {
+        // `-P1D` counts a nominal day (RFC 5545 section 3.3.6): a day before
+        // 09:00 on the first day of summer time is 09:00 the day before, 23
+        // hours earlier. It fired at 08:00, 24 hours before, when every
+        // offset was exact.
         let local = chrono_tz::Europe::Athens;
         let events = [occurrence("Flight", athens(2026, 3, 29, 9, 0))];
-        let day = |_: &Occurrence| vec![Alarm::Start(Duration::days(-1))];
+        let day = |_: &Occurrence| Alarms {
+            triggers: vec![Trigger::new(Alarm::Start(Duration::days(-1)), -1)],
+            zone: None,
+        };
         assert_eq!(
             firing_minutes(
                 &events,
                 day,
+                local,
+                athens(2026, 3, 28, 7, 0),
+                athens(2026, 3, 28, 10, 0),
+                |_| None
+            ),
+            vec![athens(2026, 3, 28, 9, 0)]
+        );
+    }
+
+    #[test]
+    fn twenty_four_hours_before_over_a_clock_change_is_twenty_four_hours() {
+        // `-PT24H` is exact, so it still fires at 08:00.
+        let local = chrono_tz::Europe::Athens;
+        let events = [occurrence("Flight", athens(2026, 3, 29, 9, 0))];
+        let hours = |_: &Occurrence| exact(vec![Alarm::Start(Duration::hours(-24))]);
+        assert_eq!(
+            firing_minutes(
+                &events,
+                hours,
                 local,
                 athens(2026, 3, 28, 7, 0),
                 athens(2026, 3, 28, 10, 0),
@@ -1620,6 +1683,49 @@ mod tests {
         let due = due_reminders(&store, &mut scheduler, &config, at(9, 55)).unwrap();
         assert_eq!(due.len(), 1, "the end-relative alarm never fired");
         assert_eq!(due[0].summary, "Exam");
+    }
+
+    #[test]
+    fn a_day_before_counts_the_events_own_days_whatever_the_viewers_zone() {
+        // A 09:00 flight in Athens on the first day of summer time, reminded
+        // "a day before" (`-P1D`): 09:00 Athens the day before, 07:00Z. The
+        // days are the event's zone's, so this holds on any machine; the old
+        // exact offset fired at 06:00Z.
+        let (_dir, mut store) = store_with(|_, _| Vec::new());
+        let calendar = store.calendars()[0].clone();
+        std::fs::write(
+            calendar.path.join("flight.ics"),
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Other//EN\r\n\
+             BEGIN:VEVENT\r\nUID:flight\r\nDTSTAMP:20260301T000000Z\r\n\
+             DTSTART;TZID=Europe/Athens:20260329T090000\r\n\
+             DTEND;TZID=Europe/Athens:20260329T110000\r\nSUMMARY:Flight\r\n\
+             BEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:Flight\r\n\
+             TRIGGER:-P1D\r\nEND:VALARM\r\n\
+             END:VEVENT\r\nEND:VCALENDAR\r\n",
+        )
+        .unwrap();
+        store.refresh().unwrap();
+        let local = store.local_timezone();
+        let viewer = |hour: u32| {
+            NaiveDate::from_ymd_opt(2026, 3, 28)
+                .unwrap()
+                .and_hms_opt(hour, 0, 0)
+                .unwrap()
+                .and_utc()
+                .with_timezone(&local)
+                .naive_local()
+        };
+
+        let config = Config::default();
+        let mut scheduler = Scheduler::new();
+        assert!(
+            due_reminders(&store, &mut scheduler, &config, viewer(6))
+                .unwrap()
+                .is_empty(),
+            "fired 24 hours before, not a day before"
+        );
+        let due = due_reminders(&store, &mut scheduler, &config, viewer(7)).unwrap();
+        assert_eq!(due.len(), 1, "the day-before reminder never fired");
     }
 
     #[test]

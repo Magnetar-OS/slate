@@ -159,7 +159,9 @@ Receive-side iMIP first — the feature separating a personal calendar from a wo
 because Envelope is in the family.
 
 - [x] Envelope detects `text/calendar` + `METHOD`, hands payload over a minimal D-Bus contract
-      (deliver-payload, send-reply).
+      (deliver-payload, send-reply). The payload comes with the mail's From address, which
+      the organizer check needs; the reply goes back with the attendee address to send it
+      from. `src/scheduling.rs` has the signatures.
 - [x] Slate renders the invitation with a conflict check for that slot;
       Accept/Tentative/Decline sets `PARTSTAT`, stores, asks Envelope to send the `REPLY`.
 - [x] `SEQUENCE` honoured; `RECURRENCE-ID`-scoped updates hit the right occurrence; `CANCEL` of

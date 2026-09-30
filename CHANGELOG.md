@@ -5,6 +5,16 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- An invitation or cancellation mailed by someone other than the meeting's
+  organizer is refused with a message. Envelope now tells Slate who each
+  message was from; until now only an invitation that named no organizer
+  could be refused.
+- An invitation sent to one of an account's aliases is recognised and
+  answered as that alias, and the reply is mailed from it. It was turned away
+  as not addressed to the account.
+
 ## [1.2.0] - 2026-09-29
 
 ### Added

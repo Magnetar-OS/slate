@@ -639,9 +639,97 @@ pub struct PendingInvitation {
     pub account_id: String,
     /// The verbatim `text/calendar` payload.
     pub ics: String,
+    /// The `From` address of the mail that carried it, when the mailer said.
+    pub sender: Option<String>,
     pub parsed: cosmic_pim_caldav::itip::Itip,
     /// The invitation's first VEVENT, for showing the slot.
     pub event: Option<crate::model::Event>,
+}
+
+/// Turns a delivered REQUEST into a question for the user, or into what the
+/// user is told instead of being asked.
+///
+/// Only the organizer may invite: a REQUEST that names none, one this
+/// account organizes itself, or one mailed by somebody other than its
+/// ORGANIZER is not an invitation to answer. Refused here rather than after
+/// the user has answered it. Without an address for the account (`me`) the
+/// question is still put; answering it says what is missing.
+pub(crate) fn review_request(
+    delivery: crate::scheduling::Delivery,
+    parsed: cosmic_pim_caldav::itip::Itip,
+    me: Option<&str>,
+) -> Result<PendingInvitation, String> {
+    if let Some(me) = me
+        && !parsed.is_from_organizer(me, delivery.sender.as_deref())
+    {
+        return Err(fl!("invitation-not-from-organizer"));
+    }
+    let event = crate::store::vdir::parse_ics(&delivery.ics, "", "")
+        .into_iter()
+        .next();
+    Ok(PendingInvitation {
+        account_id: delivery.account_id,
+        ics: delivery.ics,
+        sender: delivery.sender,
+        parsed,
+        event,
+    })
+}
+
+/// Who an account is on a scheduling message: the address the attendee gate
+/// matches and the REPLY answers as, and the name to put beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Invitee {
+    address: String,
+    /// Empty is fine — `build_reply` omits the CN.
+    name: String,
+}
+
+/// Which of `account`'s addresses the payload is addressed to: the address
+/// it sends mail from, or one of its aliases, whichever the payload names as
+/// an ATTENDEE. An invitation sent to an alias is stored and answered as
+/// that alias. When it names none of them the primary address is returned,
+/// and the attendee gate in `itip::apply` refuses the payload.
+fn invited_as(
+    account: &cosmic_pim_accounts::Account,
+    parsed: &cosmic_pim_caldav::itip::Itip,
+) -> Option<Invitee> {
+    let mail = account.mail.as_ref();
+    let name = mail.map_or("", |mail| mail.from_name.trim());
+    let primary = mail
+        .map(|mail| mail.from_address.trim())
+        .filter(|address| !address.is_empty())
+        .or_else(|| {
+            mail.and_then(|mail| mail.imap_username.as_deref())
+                .filter(|login| login.contains('@'))
+                .map(str::trim)
+        })
+        .or_else(|| {
+            account
+                .username
+                .contains('@')
+                .then(|| account.username.trim())
+        })
+        .map(|address| Invitee {
+            address: address.to_owned(),
+            name: name.to_owned(),
+        });
+    let aliases = mail
+        .into_iter()
+        .flat_map(|mail| &mail.aliases)
+        .map(|alias| {
+            let own = alias.name.trim();
+            Invitee {
+                address: alias.address.trim().to_owned(),
+                name: if own.is_empty() { name } else { own }.to_owned(),
+            }
+        });
+    primary
+        .clone()
+        .into_iter()
+        .chain(aliases)
+        .find(|invitee| parsed.is_addressed_to(&invitee.address))
+        .or(primary)
 }
 
 /// Removes the copy an earlier accept stored of the invitation `ics`, now
@@ -1943,32 +2031,22 @@ impl cosmic::Application for AppModel {
                 };
                 match parsed.method {
                     Method::Request => {
-                        // Only the organizer may invite: a REQUEST without one,
-                        // or one this account organizes itself, is not an
-                        // invitation to answer. Refused here rather than after
-                        // the user has answered it.
                         self.reload_accounts();
-                        if let Some(me) = self.account_address(&delivery.account_id)
-                            && !parsed.is_from_organizer(&me, None)
-                        {
-                            return self.toast_error(&fl!("invitation-not-from-organizer"));
+                        let me = self
+                            .invitee(&delivery.account_id, &parsed)
+                            .map(|invitee| invitee.address);
+                        match review_request(delivery, parsed, me.as_deref()) {
+                            Ok(invitation) => {
+                                enqueue_invitation(&mut self.invitations, invitation);
+                            }
+                            Err(refusal) => return self.toast_error(&refusal),
                         }
-                        let event = crate::store::vdir::parse_ics(&delivery.ics, "", "")
-                            .into_iter()
-                            .next();
-                        enqueue_invitation(
-                            &mut self.invitations,
-                            PendingInvitation {
-                                account_id: delivery.account_id,
-                                ics: delivery.ics,
-                                parsed,
-                                event,
-                            },
-                        );
                     }
                     // A CANCEL or REPLY carries no decision for this user;
                     // the gates inside `itip::apply` decide what it may do.
-                    Method::Cancel | Method::Reply => return self.apply_itip_quietly(&delivery),
+                    Method::Cancel | Method::Reply => {
+                        return self.apply_itip_quietly(&delivery, &parsed);
+                    }
                     Method::Publish | Method::Other => {}
                 }
             }
@@ -3807,35 +3885,9 @@ impl AppModel {
         self.calendars().iter().find(|c| !c.read_only).cloned()
     }
 
-    /// The address `account_id` receives mail at — the identity the attendee
-    /// gate matches and the REPLY answers as.
-    fn account_address(&self, account_id: &str) -> Option<String> {
-        let account = self.accounts.as_ref()?.get(account_id)?;
-        if let Some(mail) = &account.mail {
-            if !mail.from_address.trim().is_empty() {
-                return Some(mail.from_address.trim().to_owned());
-            }
-            if let Some(login) = &mail.imap_username
-                && login.contains('@')
-            {
-                return Some(login.trim().to_owned());
-            }
-        }
-        account
-            .username
-            .contains('@')
-            .then(|| account.username.trim().to_owned())
-    }
-
-    /// The display name to put on a REPLY. Empty is fine — `build_reply`
-    /// omits the CN.
-    fn account_display_name(&self, account_id: &str) -> String {
-        self.accounts
-            .as_ref()
-            .and_then(|a| a.get(account_id))
-            .and_then(|a| a.mail.as_ref())
-            .map(|m| m.from_name.trim().to_owned())
-            .unwrap_or_default()
+    /// Who `account_id` is on the payload `parsed` — see [`invited_as`].
+    fn invitee(&self, account_id: &str, parsed: &cosmic_pim_caldav::itip::Itip) -> Option<Invitee> {
+        invited_as(self.accounts.as_ref()?.get(account_id)?, parsed)
     }
 
     fn refresh_after_invitation(&mut self) {
@@ -3873,13 +3925,14 @@ impl AppModel {
         let Some(meta) = self.invitation_collection(&invitation.account_id) else {
             return self.toast_error(&fl!("no-writable-calendar"));
         };
-        let Some(me) = self.account_address(&invitation.account_id) else {
+        let Some(me) = self.invitee(&invitation.account_id, &invitation.parsed) else {
             return self.toast_error(&fl!("invitation-no-address"));
         };
+        let sender = invitation.sender.as_deref();
         let mut queued = Ok(());
 
         if answer == InviteAnswer::Declined {
-            match withdraw_declined(&meta.path, &invitation.ics, &me) {
+            match withdraw_declined(&meta.path, &invitation.ics, &me.address) {
                 Ok(itip::Outcome::Cancelled { file }) => {
                     queued = queue_writeback_delete_file(&meta.id, &file);
                 }
@@ -3895,7 +3948,7 @@ impl AppModel {
                 Err(why) => return self.toast_error(&why.to_string()),
             }
         } else {
-            match itip::apply(&meta.path, &invitation.ics, &me, None) {
+            match itip::apply(&meta.path, &invitation.ics, &me.address, sender) {
                 // Neither can succeed on a retry; the invitation is done with.
                 Ok(itip::Outcome::Stale) => {
                     self.invitations.remove(0);
@@ -3940,12 +3993,12 @@ impl AppModel {
                 summary: invitation.parsed.summary.as_deref(),
                 partstat: answer.partstat(),
             },
-            &me,
-            &self.account_display_name(&invitation.account_id),
+            &me.address,
+            &me.name,
         );
 
         if answer != InviteAnswer::Declined {
-            match itip::apply(&meta.path, &reply_ics, &me, None) {
+            match itip::apply(&meta.path, &reply_ics, &me.address, None) {
                 Ok(outcome) => {
                     if let Some(file) = outcome.file() {
                         queued = queue_writeback_file(&meta.id, file, None);
@@ -3961,14 +4014,16 @@ impl AppModel {
         let Some(conn) = self.dbus.clone() else {
             return Task::batch([unqueued, self.toast_info(&fl!("invitation-reply-by-mail"))]);
         };
-        let account_id = invitation.account_id.clone();
+        // From the address the invitation was sent to: the reply's ATTENDEE.
+        let (account_id, from) = (invitation.account_id.clone(), me.address);
         let reply = cosmic::task::future(async move {
-            let queued = crate::scheduling::send_reply(&conn, &reply_ics, &account_id, &organizer)
-                .await
-                .unwrap_or_else(|why| {
-                    tracing::warn!(%why, "the scheduling reply could not reach Envelope");
-                    false
-                });
+            let queued =
+                crate::scheduling::send_reply(&conn, &reply_ics, &account_id, &organizer, &from)
+                    .await
+                    .unwrap_or_else(|why| {
+                        tracing::warn!(%why, "the scheduling reply could not reach Envelope");
+                        false
+                    });
             Message::InvitationReplySent(queued)
         });
         Task::batch([unqueued, reply])
@@ -3979,6 +4034,7 @@ impl AppModel {
     fn apply_itip_quietly(
         &mut self,
         delivery: &crate::scheduling::Delivery,
+        parsed: &cosmic_pim_caldav::itip::Itip,
     ) -> Task<cosmic::Action<Message>> {
         use cosmic_pim_caldav::itip::Outcome;
 
@@ -3987,9 +4043,11 @@ impl AppModel {
             return Task::none();
         };
         let me = self
-            .account_address(&delivery.account_id)
+            .invitee(&delivery.account_id, parsed)
+            .map(|invitee| invitee.address)
             .unwrap_or_default();
-        match cosmic_pim_caldav::itip::apply(&meta.path, &delivery.ics, &me, None) {
+        let sender = delivery.sender.as_deref();
+        match cosmic_pim_caldav::itip::apply(&meta.path, &delivery.ics, &me, sender) {
             Ok(outcome) => {
                 let queued = match &outcome {
                     // A whole-series CANCEL removed the file; the deletion
@@ -5877,10 +5935,64 @@ mod tests {
         );
         PendingInvitation {
             account_id: "work".into(),
+            sender: None,
             parsed: cosmic_pim_caldav::itip::parse(&ics).unwrap(),
             event: None,
             ics,
         }
+    }
+
+    /// An account that sends as me@example.com and, as an alias, as
+    /// sales@example.com.
+    fn account_with_an_alias() -> cosmic_pim_accounts::Account {
+        let mut mail = cosmic_pim_accounts::MailEndpoint::tls("imap.example.com");
+        mail.from_address = "me@example.com".into();
+        mail.from_name = "Ada".into();
+        mail.aliases = vec![cosmic_pim_accounts::Alias {
+            name: "Ada, Sales".into(),
+            address: "Sales@example.com".into(),
+        }];
+        let mut account =
+            cosmic_pim_accounts::Account::new("Work", "https://dav.example.com", "ada");
+        account.mail = Some(mail);
+        account
+    }
+
+    fn request_to(attendee: &str) -> cosmic_pim_caldav::itip::Itip {
+        cosmic_pim_caldav::itip::parse(&format!(
+            "BEGIN:VCALENDAR\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:x@y\r\n\
+             DTSTART:20260804T090000Z\r\nORGANIZER:mailto:boss@example.com\r\n\
+             ATTENDEE:mailto:{attendee}\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_invitation_sent_to_an_alias_is_answered_as_that_alias() {
+        let account = account_with_an_alias();
+        assert_eq!(
+            invited_as(&account, &request_to("sales@example.com")),
+            Some(Invitee {
+                address: "Sales@example.com".into(),
+                name: "Ada, Sales".into(),
+            })
+        );
+        assert_eq!(
+            invited_as(&account, &request_to("me@example.com")),
+            Some(Invitee {
+                address: "me@example.com".into(),
+                name: "Ada".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn an_invitation_to_nobody_here_is_left_to_the_attendee_gate() {
+        let account = account_with_an_alias();
+        let parsed = request_to("someone.else@example.com");
+        let me = invited_as(&account, &parsed).unwrap();
+        assert_eq!(me.address, "me@example.com");
+        assert!(!parsed.is_addressed_to(&me.address));
     }
 
     #[test]

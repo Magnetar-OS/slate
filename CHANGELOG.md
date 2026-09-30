@@ -26,6 +26,10 @@ All notable user-facing changes to Slate. The format follows
   made as one step, where a sync could land between the two, find the
   change not yet queued and replace it. Moving an event between two synced
   calendars is one such step for both of them.
+- Changing how often a series from another app repeats keeps the rest of its
+  rule as that app wrote it: the first day of the week and the spelling of
+  its end date. The whole rule used to be rewritten from the editor's
+  fields, which dropped the one and could move the other by a day.
 - Adding, changing or removing a reminder on an event that already exists is
   saved. The editor accepted the change and the save dropped it.
 - Moving a repeating event to another calendar takes its changed occurrences

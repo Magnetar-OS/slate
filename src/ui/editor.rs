@@ -456,17 +456,15 @@ impl Editor {
         } else if let Some(raw) = &self.custom_rrule {
             // Never rewrite a rule we could not fully parse.
             Some(raw.clone())
-        } else if let Some(original) = &self.original
-            && original.rrule.is_some()
-            && original.recurrence() == Some(recurrence)
-        {
-            // Nor one the user left as it was. Parsing is lossy — `UNTIL`
-            // keeps only its date, `WKST` is dropped — so re-rendering an
-            // untouched rule rewrites bytes another client chose.
-            original.rrule.clone()
+        } else if let Some(original) = self.original.as_ref().and_then(|e| e.rrule.as_deref()) {
+            // Patched over the rule the series has: what the user did not
+            // change keeps its spelling, and what the fields do not model
+            // (`WKST`, the order of the parts) is kept, so an untouched rule
+            // is written back byte for byte. `UNTIL` is written in the
+            // series' own terms, so it needs the start the series is saved
+            // with.
+            recurrence.to_rrule_keeping(start, original)
         } else {
-            // `UNTIL` is written in the series' own terms, so it needs the
-            // start the series is saved with.
             recurrence.to_rrule(start)
         };
 
@@ -1562,7 +1560,7 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_simple_rule_is_rendered_from_the_fields() {
+    fn a_changed_simple_rule_takes_the_fields() {
         let mut event = Event::draft(
             "personal",
             NaiveDate::from_ymd_opt(2026, 9, 1)
@@ -1577,10 +1575,39 @@ mod tests {
         let mut editor = Editor::from_event(&event, chrono_tz::UTC);
         editor.interval = "2".into();
 
+        // The new part goes after the ones the rule had, which keep their
+        // order.
         let saved = editor.to_event(chrono_tz::UTC).unwrap();
         assert_eq!(
             saved.rrule.as_deref(),
-            Some("FREQ=DAILY;INTERVAL=2;COUNT=5")
+            Some("FREQ=DAILY;COUNT=5;INTERVAL=2")
+        );
+    }
+
+    #[test]
+    fn a_changed_rule_keeps_what_the_fields_do_not_show() {
+        // The same Los Angeles rule as above, now every other day: WKST and
+        // the UTC spelling of the unchanged UNTIL stay as the other client
+        // wrote them. Rendering from the fields dropped WKST and re-spelled
+        // UNTIL a day wider (audit F-04).
+        let mut event = Event::draft(
+            "personal",
+            NaiveDate::from_ymd_opt(2026, 9, 1)
+                .unwrap()
+                .and_hms_opt(16, 0, 0)
+                .unwrap(),
+            chrono_tz::UTC,
+        );
+        event.summary = "Standup".into();
+        event.rrule = Some("FREQ=DAILY;WKST=MO;UNTIL=20261001T065959Z".into());
+
+        let mut editor = Editor::from_event(&event, chrono_tz::UTC);
+        editor.interval = "2".into();
+
+        let saved = editor.to_event(chrono_tz::UTC).unwrap();
+        assert_eq!(
+            saved.rrule.as_deref(),
+            Some("FREQ=DAILY;WKST=MO;UNTIL=20261001T065959Z;INTERVAL=2")
         );
     }
 

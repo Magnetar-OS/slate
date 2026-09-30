@@ -5,8 +5,20 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Built against cosmic-pim 2.1 and the current COSMIC libraries (libcosmic
+  `6af8b70`).
+
 ### Fixed
 
+- Adding, changing or removing a reminder on an event that already exists is
+  saved. The editor accepted the change and the save dropped it.
+- Moving a repeating event to another calendar takes its changed occurrences
+  with it. They were deleted.
+- A calendar subscription whose feed comes back cut short, or suddenly empty,
+  no longer loses its events: a truncated or oversized feed is refused, and an
+  empty one is fetched again before it is believed.
 - An invitation or cancellation mailed by someone other than the meeting's
   organizer is refused with a message. Envelope now tells Slate who each
   message was from; until now only an invitation that named no organizer

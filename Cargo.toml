@@ -19,7 +19,7 @@ publish = false
 # `model`, `store`, and `atomic` are re-exported from lib.rs, so in-app paths
 # stay `crate::model::…` / `crate::store::…`.
 #
-# Version dependencies: cosmic-pim 2 is on crates.io, so these resolve
+# Version dependencies: cosmic-pim 2.1 is on crates.io, so these resolve
 # from the registry and the app no longer needs a sibling checkout to build.
 #
 # The licence gate is open: Meltemi grants MPL-2.0 (Exhibit A only) on each
@@ -28,17 +28,17 @@ publish = false
 # For local work against the sibling checkout, uncomment the
 # `[patch.crates-io]` block at the bottom of this file — do not reintroduce
 # paths here, or a release build would silently prefer the working tree.
-cosmic-pim-core = "2"
+cosmic-pim-core = "2.1"
 # Accounts, credentials, and the CalDAV sync cycle. Used by the daemon (which
 # runs sync on a timer) and by the app's settings UI.
-cosmic-pim-accounts = "2"
+cosmic-pim-accounts = "2.1"
 # Without the mail pass: Slate syncs calendars and address books only, and the
 # default feature would pull in the mail and OpenPGP stacks for nothing.
-cosmic-pim-sync = { version = "2", default-features = false }
+cosmic-pim-sync = { version = "2.1", default-features = false }
 # ICS feed subscriptions. Used directly by the daemon, which drives feed
 # refreshes on its sync tick — the account-based sync engine deliberately does
 # not schedule them, because a feed is a URL, not an account.
-cosmic-pim-caldav = "2"
+cosmic-pim-caldav = "2.1"
 
 # --- COSMIC / UI ---
 # Animated sidebar collapse and the icon-only rail — neither exists in

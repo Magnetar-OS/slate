@@ -1314,6 +1314,52 @@ mod tests {
     }
 
     #[test]
+    fn a_reminder_edit_on_a_saved_event_reaches_its_file() {
+        // The save patches an existing file property by property, and a
+        // reminder is a nested VALARM: before cosmic-pim 2.1 the edit was
+        // accepted here and then dropped on the way to disk.
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = crate::store::Store::open(
+            &dir.path().join("calendars"),
+            &dir.path().join("index.sqlite"),
+        )
+        .unwrap();
+        let calendar = store
+            .create_calendar("Personal", crate::model::PALETTE[0])
+            .unwrap();
+        let local = store.local_timezone();
+        let nine = NaiveDate::from_ymd_opt(2026, 8, 4)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap();
+        let mut event = Event::draft(&calendar.id, nine, local);
+        event.summary = "Dentist".into();
+        event.alarms = vec![chrono::Duration::minutes(-10)];
+        store.save(&event).unwrap();
+
+        let saved = store.event(&calendar.id, &event.uid).unwrap().unwrap();
+        let mut editor = Editor::from_event(&saved, local);
+        editor.add_alarm(
+            ALARM_PRESETS
+                .iter()
+                .position(|o| *o == chrono::Duration::days(-1))
+                .unwrap(),
+        );
+        editor.remove_alarm(1);
+        store.save(&editor.to_event(local).unwrap()).unwrap();
+
+        assert_eq!(
+            store
+                .event(&calendar.id, &event.uid)
+                .unwrap()
+                .unwrap()
+                .alarms,
+            vec![chrono::Duration::days(-1)],
+            "the reminder edit was not written"
+        );
+    }
+
+    #[test]
     fn a_floating_time_stays_floating() {
         let athens = chrono_tz::Europe::Athens;
         let nine = NaiveDate::from_ymd_opt(2026, 8, 4)

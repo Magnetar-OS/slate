@@ -5,6 +5,10 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Rebuilt against the current COSMIC libraries (libcosmic `5a8bd94`).
+
 ## [1.2.2] - 2026-09-30
 
 ### Changed

@@ -133,7 +133,7 @@ validation, formatting, clippy, and the test suite. The metadata pass needs
 | `~/.cache/cosmic-pim/index.sqlite` | Query index, shared with the suite. Pure cache — safe to delete, rebuilds itself. |
 | `~/.config/cosmic/com.magnetaros.Slate/` | Settings, via `cosmic-config`. |
 | `~/.config/cosmic-pim/accounts.toml` | Accounts, shared with Circle and Envelope. Passwords live in the OS keychain. |
-| `/usr/share/pop-launcher/plugins/slate/` | Launcher plugin registration. |
+| `/usr/lib/pop-launcher/plugins/slate/` | Launcher plugin registration, with `slate-launcher` linked in beside it. `~/.local/share/pop-launcher/plugins/slate/` for `just install-user`. |
 | `/usr/lib/systemd/user/slate-daemon.service` | Reminder daemon unit. |
 | `~/.local/state/slate/fired-reminders.json` | Reminders already shown, shared by the app and the daemon so a restart or a hand-over between them never shows one twice. |
 

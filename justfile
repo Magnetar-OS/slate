@@ -42,7 +42,11 @@ applet-desktop-dst := base-dir / 'share' / 'applications' / (applet-appid + '.de
 systemd-dst := base-dir / 'lib' / 'systemd' / 'user' / (daemon + '.service')
 # One directory per plugin, named for the plugin rather than for what it
 # searches: `calendar` would collide with any other calendar plugin installed.
-launcher-dst := base-dir / 'share' / 'pop-launcher' / 'plugins' / name
+# pop-launcher searches ~/.local/share, /etc and /usr/lib — so lib for a
+# system install and share for `install-user`; a plugin in /usr/share is never
+# found.
+launcher-root := if prefix == '/usr' { 'lib' } else { 'share' }
+launcher-dst := base-dir / launcher-root / 'pop-launcher' / 'plugins' / name
 appdata-dst := base-dir / 'share' / 'metainfo' / (appid + '.metainfo.xml')
 icons-dst := base-dir / 'share' / 'icons' / 'hicolor'
 icon-svg-dst := icons-dst / 'scalable' / 'apps' / (appid + '.svg')
@@ -149,6 +153,9 @@ install:
     done
     install -Dm0644 resources/slate-daemon.service {{systemd-dst}}
     install -Dm0644 resources/launcher/plugin.ron {{launcher-dst}}/plugin.ron
+    # pop-launcher runs `bin.path` from the plugin's own directory, so the
+    # binary is linked in beside the manifest, as the stock plugins do it.
+    ln -sf ../../../../bin/{{launcher}} {{launcher-dst}}/{{launcher}}
     # Guarded on rootdir: unguarded, these create cache files inside a staged
     # package root, which then ship in the package and conflict with every
     # other package's copy — a staged tree's caches belong to the package

@@ -313,6 +313,40 @@ mod tests {
     use super::*;
     use pop_launcher::{PluginResponse, Request};
 
+    /// The manifest, without its comments.
+    fn manifest() -> String {
+        include_str!("../../resources/launcher/plugin.ron")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// pop-launcher reads the manifest with RON's `implicit_some`, where
+    /// `Some(...)` is a parse error: it logs "malformed config" to its own
+    /// log and skips the plugin. Every optional field was written that way
+    /// once, and the plugin was never loaded.
+    #[test]
+    fn the_manifest_writes_optional_fields_the_way_pop_launcher_reads_them() {
+        assert!(!manifest().contains("Some("), "{}", manifest());
+    }
+
+    /// `bin.path` is resolved in the plugin's own directory, where the
+    /// justfile links this binary in under its own name.
+    #[test]
+    fn the_manifest_runs_this_binary() {
+        let path = format!("path: \"{}\"", env!("CARGO_BIN_NAME"));
+        assert!(manifest().contains(&path), "{}", manifest());
+    }
+
+    /// Without a `regex` pop-launcher sends a plugin every query typed, and
+    /// its results sit among the applications.
+    #[test]
+    fn the_manifest_asks_only_for_queries_with_the_prefix() {
+        assert!(manifest().contains("regex: \"^cal \""), "{}", manifest());
+        assert!(manifest().contains("isolate: true"), "{}", manifest());
+    }
+
     #[test]
     fn the_launchers_requests_are_understood() {
         let search = serde_json::to_value(Request::Search("cal standup".into())).unwrap();

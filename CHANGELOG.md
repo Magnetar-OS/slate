@@ -16,6 +16,15 @@ All notable user-facing changes to Slate. The format follows
   Circle — appears on the Accounts page within a couple of seconds, without a
   restart, and its calendars are fetched at once.
 
+### Fixed
+
+- `cal standup` in the COSMIC launcher finds the standup. It never had: the
+  launcher plugin was installed under `/usr/share`, where pop-launcher does
+  not look, and its manifest was written in a form pop-launcher refuses to
+  read. The plugin is now installed under `/usr/lib/pop-launcher/plugins` — or
+  `~/.local/share` for a per-user install — with its program linked in beside
+  it, and the manifest is one pop-launcher loads.
+
 ## [1.2.3] - 2026-10-03
 
 ### Changed

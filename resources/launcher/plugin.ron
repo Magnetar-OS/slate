@@ -1,17 +1,20 @@
+// Read by pop-launcher with RON's `implicit_some`: an optional field is
+// written bare. `Some(...)` is a parse error there — "malformed config", in
+// pop-launcher's own log and nowhere else — and the plugin is skipped.
 (
     name: "Slate",
     description: "Search your calendar events",
     bin: (
         path: "slate-launcher",
     ),
-    icon: Some(Name("x-office-calendar")),
+    icon: Name("x-office-calendar"),
     query: (
         // Only run when the query starts with "cal ". pop-launcher routes a
         // query to a plugin by its `regex`; a plugin without one receives
         // every query, and this one would search the calendar on every
         // keystroke typed into the launcher. `help` is only the hint shown.
-        regex: Some("^cal "),
-        help: Some("cal "),
+        regex: "^cal ",
+        help: "cal ",
         // Once the user has typed the prefix they asked for events; other
         // plugins' matches for "cal standup" are noise.
         isolate: true,

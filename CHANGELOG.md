@@ -5,6 +5,14 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Add account opens the desktop's Accounts window, which takes an address and
+  works out the rest; the account it adds brings mail and contacts to Envelope
+  and Circle too. The server form stays, as Add a server, for a CalDAV server
+  typed in by its address, and opens by itself where the Accounts window is
+  not installed.
+
 ## [1.2.3] - 2026-10-03
 
 ### Changed

@@ -235,6 +235,9 @@ pub enum Message {
     ToggleShowCompleted,
 
     // Accounts
+    /// Open the desktop's Accounts window, where an account is added for the
+    /// whole suite by its address.
+    OpenAccountsWindow,
     AccountAddStart,
     AccountAddCancel,
     AccountAddConfirm,
@@ -1973,6 +1976,9 @@ impl cosmic::Application for AppModel {
                 }
             }
 
+            Message::OpenAccountsWindow => {
+                add_account_elsewhere(&mut self.account_form, crate::handoff::ACCOUNTS_WINDOW);
+            }
             Message::AccountAddStart => self.account_form = Some(AccountForm::default()),
             Message::AccountAddCancel => self.account_form = None,
             Message::AccountNameChanged(v) => self.with_account_form(|f| f.display_name = v),
@@ -5686,6 +5692,18 @@ fn is_loopback(url: &str) -> bool {
     host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
+/// What Add account does: starts the desktop's Accounts window, which takes
+/// an address and works out the rest. Where `program` cannot be started —
+/// the Accounts window is a package of its own, and may not be installed —
+/// the server form here opens instead, which does the job for a CalDAV
+/// account.
+fn add_account_elsewhere(form: &mut Option<AccountForm>, program: &str) {
+    if let Err(why) = crate::handoff::start(crate::handoff::add_account(program)) {
+        tracing::info!(%why, "no Accounts window; using the server form");
+        *form = Some(AccountForm::default());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5696,6 +5714,27 @@ mod tests {
 
     fn at(y: i32, m: u32, d: u32, h: u32, min: u32) -> NaiveDateTime {
         day(y, m, d).and_hms_opt(h, min, 0).unwrap()
+    }
+
+    #[test]
+    fn without_the_accounts_window_add_account_opens_the_server_form() {
+        // A desktop without the Accounts window installed must still be able
+        // to add an account.
+        let mut form = None;
+
+        add_account_elsewhere(&mut form, "/nonexistent/magnetar-accounts");
+
+        assert!(form.is_some(), "nothing opened to add an account with");
+    }
+
+    #[test]
+    fn with_the_accounts_window_the_server_form_stays_closed() {
+        // `true` stands in for the Accounts window: it starts.
+        let mut form = None;
+
+        add_account_elsewhere(&mut form, "true");
+
+        assert!(form.is_none());
     }
 
     #[test]

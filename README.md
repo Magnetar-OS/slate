@@ -35,6 +35,10 @@ Two consequences worth knowing:
 - **Accounts are shared.** A CalDAV account added here lives at
   `$XDG_CONFIG_HOME/cosmic-pim/accounts.toml` with its password in the OS
   keychain, and is already visible to Circle and Envelope. You enter it once.
+  *Add account* opens the desktop's Accounts window
+  (`magnetar-accounts --for=calendar`), which takes an address and works out
+  the rest; *Add a server* is Slate's own form for a CalDAV address, and is
+  what *Add account* opens where the Accounts window is not installed.
 - **Fixes are shared.** A bug in the sync reconciler is fixed in `cosmic-pim`
   and all three apps get it. Please do not work around substrate bugs here.
 

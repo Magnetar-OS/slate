@@ -54,12 +54,21 @@ pub fn view<'a>(
         column = column.push(list);
     }
 
+    // The Accounts window first: it takes an address and works out the rest,
+    // and the account it adds brings mail and contacts along where the
+    // provider has them. The server form stays for a CalDAV server nobody's
+    // address would lead to.
     column = match form {
         Some(form) => column.push(add_form(form)),
         None => column.push(
-            widget::button::text(fl!("add-account"))
-                .class(cosmic::theme::Button::Suggested)
-                .on_press(Message::AccountAddStart),
+            widget::row::with_capacity(2)
+                .spacing(spacing.space_xs)
+                .push(
+                    widget::button::text(fl!("add-account"))
+                        .class(cosmic::theme::Button::Suggested)
+                        .on_press(Message::OpenAccountsWindow),
+                )
+                .push(widget::button::text(fl!("add-server")).on_press(Message::AccountAddStart)),
         ),
     };
 

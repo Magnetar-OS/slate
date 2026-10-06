@@ -183,6 +183,8 @@ error-remote-file = Only local files are supported.
 ## Accounts and sync
 accounts = Accounts
 add-account = Add account…
+# Beside Add account: a CalDAV server typed in by its address.
+add-server = Add a server…
 add = Add
 remove = Remove
 account-name = Name
@@ -190,7 +192,7 @@ server-url = Server address
 username = Username
 password = Password
 app-password-hint = Many providers require an app-specific password rather than your normal one.
-no-accounts-description = Add a CalDAV account to sync your calendars with a server.
+no-accounts-description = Add an account to sync your calendars — the same one Envelope and Circle use.
 sync-now = Sync now
 syncing = Syncing…
 # The reminder daemon runs sync while it is up; this is its failure to.

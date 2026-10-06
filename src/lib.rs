@@ -18,6 +18,7 @@ pub mod app;
 pub mod background;
 pub mod clock;
 pub mod config;
+pub mod handoff;
 pub mod i18n;
 pub mod key_bind;
 pub mod meeting;

@@ -39,6 +39,8 @@ Two consequences worth knowing:
   (`magnetar-accounts --for=calendar`), which takes an address and works out
   the rest; *Add a server* is Slate's own form for a CalDAV address, and is
   what *Add account* opens where the Accounts window is not installed.
+  An account added anywhere else shows up here within a couple of seconds and
+  is synced at once.
 - **Fixes are shared.** A bug in the sync reconciler is fixed in `cosmic-pim`
   and all three apps get it. Please do not work around substrate bugs here.
 

@@ -12,6 +12,9 @@ All notable user-facing changes to Slate. The format follows
   and Circle too. The server form stays, as Add a server, for a CalDAV server
   typed in by its address, and opens by itself where the Accounts window is
   not installed.
+- An account added in another application — the Accounts window, Envelope,
+  Circle — appears on the Accounts page within a couple of seconds, without a
+  restart, and its calendars are fetched at once.
 
 ## [1.2.3] - 2026-10-03
 

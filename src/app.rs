@@ -120,6 +120,9 @@ pub struct AppModel {
     /// Accounts and credentials. `None` when the store could not be opened —
     /// the calendar still works, it just cannot sync.
     accounts: Option<cosmic_pim_accounts::AccountStore>,
+    /// The account list's size and modification time when it was last read,
+    /// so an account added in another application is noticed.
+    accounts_stamp: Stamp,
     account_form: Option<AccountForm>,
     syncing: bool,
     /// Loaded on demand for the Tasks view.
@@ -238,6 +241,8 @@ pub enum Message {
     /// Open the desktop's Accounts window, where an account is added for the
     /// whole suite by its address.
     OpenAccountsWindow,
+    /// Time to look whether the shared account list changed on disk.
+    AccountsFileCheck,
     AccountAddStart,
     AccountAddCancel,
     AccountAddConfirm,
@@ -1059,6 +1064,7 @@ impl cosmic::Application for AppModel {
             sidebar_rail: false,
             editor: None,
             new_calendar_name: None,
+            accounts_stamp: accounts_file_stamp(),
             accounts: match cosmic_pim_accounts::AccountStore::open_default() {
                 Ok(accounts) => Some(accounts),
                 Err(why) => {
@@ -1684,6 +1690,10 @@ impl cosmic::Application for AppModel {
             owner_subscription(),
             // Moves the "now" marker and rolls the highlight over at midnight.
             cosmic::iced::time::every(std::time::Duration::from_secs(30)).map(|_| Message::Tick),
+            // Accounts are the suite's: one added in the Accounts window, or
+            // in Envelope or Circle, appears here without a restart. A `stat`
+            // every two seconds.
+            cosmic::iced::time::every(ACCOUNTS_FILE_CHECK).map(|_| Message::AccountsFileCheck),
             // Only `Ignored` presses: a focused text input has already claimed
             // anything it wants, so the editor keeps its arrow keys.
             cosmic::iced::event::listen_with(|event, status, _window| match (event, status) {
@@ -1978,6 +1988,12 @@ impl cosmic::Application for AppModel {
 
             Message::OpenAccountsWindow => {
                 add_account_elsewhere(&mut self.account_form, crate::handoff::ACCOUNTS_WINDOW);
+            }
+            Message::AccountsFileCheck => {
+                let path = cosmic_pim_accounts::account::default_config_path();
+                if stamp_changed(&mut self.accounts_stamp, &path) {
+                    return self.accounts_file_changed();
+                }
             }
             Message::AccountAddStart => self.account_form = Some(AccountForm::default()),
             Message::AccountAddCancel => self.account_form = None,
@@ -3461,6 +3477,36 @@ impl AppModel {
             // The copy we have is still better than none.
             tracing::warn!(%why, "cannot reread the account store");
         }
+    }
+
+    /// The shared account list was written — by the Accounts window, by
+    /// Envelope or Circle, or by this window: reads it again, and fetches the
+    /// calendars of an account that was not in it before.
+    ///
+    /// The same reason an account added here is synced at once: someone has
+    /// just said where their calendar is. An account added here is already
+    /// in the list this reads against, so it is not fetched twice.
+    fn accounts_file_changed(&mut self) -> Task<cosmic::Action<Message>> {
+        let known: Vec<String> = self
+            .accounts
+            .iter()
+            .flat_map(cosmic_pim_accounts::AccountStore::accounts)
+            .map(|account| account.id.clone())
+            .collect();
+        if self.accounts.is_some() {
+            self.reload_accounts();
+        } else {
+            // The store could not be opened at start-up. It may open now.
+            match cosmic_pim_accounts::AccountStore::open_default() {
+                Ok(accounts) => self.accounts = Some(accounts),
+                Err(why) => tracing::warn!(%why, "still cannot open the account store"),
+            }
+        }
+        let now = self.accounts.as_ref().map_or(&[][..], |a| a.accounts());
+        if has_new_account(&known, now) {
+            return self.sync_now();
+        }
+        Task::none()
     }
 
     /// Validates the add-account form and stores the account.
@@ -5704,6 +5750,44 @@ fn add_account_elsewhere(form: &mut Option<AccountForm>, program: &str) {
     }
 }
 
+/// How often to look whether the shared account list changed. A `stat`, so
+/// cheap enough to do this often: an account added in the Accounts window
+/// should appear here before the person has finished switching windows.
+const ACCOUNTS_FILE_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// What identifies one version of a file on disk: its size and its
+/// modification time. `None` when there is no file.
+type Stamp = Option<(u64, std::time::SystemTime)>;
+
+/// The account list's stamp, as it is on disk now.
+fn accounts_file_stamp() -> Stamp {
+    file_stamp(&cosmic_pim_accounts::account::default_config_path())
+}
+
+fn file_stamp(path: &std::path::Path) -> Stamp {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()?))
+}
+
+/// Whether the file at `path` is a different version from the one `last`
+/// names, which is brought up to date.
+///
+/// However many times the file was written since the last look, that is one
+/// change: the list is read once per look, not once per write.
+fn stamp_changed(last: &mut Stamp, path: &std::path::Path) -> bool {
+    let now = file_stamp(path);
+    if now == *last {
+        return false;
+    }
+    *last = now;
+    true
+}
+
+/// Whether `accounts` holds one whose id is not among `known`.
+fn has_new_account(known: &[String], accounts: &[cosmic_pim_accounts::Account]) -> bool {
+    accounts.iter().any(|account| !known.contains(&account.id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5714,6 +5798,73 @@ mod tests {
 
     fn at(y: i32, m: u32, d: u32, h: u32, min: u32) -> NaiveDateTime {
         day(y, m, d).and_hms_opt(h, min, 0).unwrap()
+    }
+
+    #[test]
+    fn a_change_to_the_account_list_changes_its_stamp() {
+        // The stamp is how an account added in the Accounts window reaches
+        // the accounts page without a restart.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("accounts.toml");
+        assert_eq!(file_stamp(&path), None);
+
+        std::fs::write(&path, "").unwrap();
+        let empty = file_stamp(&path);
+        std::fs::write(&path, "[[account]]\nid = \"a\"\n").unwrap();
+
+        assert!(empty.is_some());
+        assert_ne!(file_stamp(&path), empty);
+    }
+
+    #[test]
+    fn the_account_list_is_read_once_per_look_however_often_it_was_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("accounts.toml");
+        let mut last = file_stamp(&path);
+
+        // Nothing there, nothing written: nothing to read.
+        assert!(!stamp_changed(&mut last, &path));
+
+        // The Accounts window adding an account is several writes: the
+        // account, then what discovery found for it.
+        std::fs::write(&path, "[[account]]\nid = \"a\"\n").unwrap();
+        std::fs::write(
+            &path,
+            "[[account]]\nid = \"a\"\nurl = \"https://dav.example\"\n",
+        )
+        .unwrap();
+        assert!(stamp_changed(&mut last, &path));
+        assert!(
+            !stamp_changed(&mut last, &path),
+            "one change was read twice"
+        );
+        assert!(!stamp_changed(&mut last, &path));
+
+        // Every account removed, and the file with them.
+        std::fs::remove_file(&path).unwrap();
+        assert!(stamp_changed(&mut last, &path));
+        assert!(!stamp_changed(&mut last, &path));
+    }
+
+    #[test]
+    fn only_an_account_that_was_not_in_the_list_is_one_to_fetch() {
+        let account = |id: &str| {
+            let mut account =
+                cosmic_pim_accounts::Account::new(id, "https://dav.example", "ada@example.com");
+            account.id = id.to_owned();
+            account
+        };
+        let known = ["a".to_owned()];
+
+        // Added in the Accounts window.
+        assert!(has_new_account(&known, &[account("a"), account("b")]));
+        assert!(has_new_account(&[], &[account("a")]));
+
+        // Rewritten with the same accounts, or with one removed: nothing to
+        // fetch.
+        assert!(!has_new_account(&known, &[account("a")]));
+        assert!(!has_new_account(&known, &[]));
+        assert!(!has_new_account(&[], &[]));
     }
 
     #[test]

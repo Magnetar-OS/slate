@@ -15,6 +15,11 @@ All notable user-facing changes to Slate. The format follows
 - An account added in another application — the Accounts window, Envelope,
   Circle — appears on the Accounts page within a couple of seconds, without a
   restart, and its calendars are fetched at once.
+- The attendee field completes from the address book — Circle's contacts —
+  from two letters of a name or an address. A pick invites the person under
+  their name; somebody already invited is not offered again. The book is
+  read again each time a new attendee is begun, so a contact added
+  meanwhile is offered.
 
 ### Fixed
 

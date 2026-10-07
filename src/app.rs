@@ -124,6 +124,11 @@ pub struct AppModel {
     /// so an account added in another application is noticed.
     accounts_stamp: Stamp,
     account_form: Option<AccountForm>,
+    /// The address book attendees complete from, as last read. Empty until
+    /// the first attendee is typed.
+    address_book: std::sync::Arc<Vec<cosmic_pim_core::recipients::Known>>,
+    /// A read of the address book is under way.
+    address_book_loading: bool,
     /// The provider manifests, read once: what an account made from a
     /// provider is shown with, since it carries no address of its own.
     providers: cosmic_pim_accounts::Registry,
@@ -334,6 +339,10 @@ pub enum Message {
     EditorPickerNext,
     EditorAttendeeDraft(String),
     EditorAttendeeAdd,
+    /// One of the address book's matches for the attendee field was chosen.
+    EditorAttendeePicked(usize),
+    /// The address book, read off the UI thread for attendee completion.
+    AddressBookLoaded(std::sync::Arc<Vec<cosmic_pim_core::recipients::Known>>),
     EditorAttendeeRemove(usize),
     /// Ask the calendar's server when the attendees are busy.
     EditorCheckAvailability,
@@ -1076,6 +1085,8 @@ impl cosmic::Application for AppModel {
                 }
             },
             account_form: None,
+            address_book: std::sync::Arc::default(),
+            address_book_loading: false,
             providers: cosmic_pim_accounts::Registry::load(),
             syncing: false,
             todos: Vec::new(),
@@ -2269,7 +2280,33 @@ impl cosmic::Application for AppModel {
                 e.tz_picking = None;
                 e.tz_query.clear();
             }),
-            Message::EditorAttendeeDraft(v) => self.with_editor(|e| e.attendee_draft = v),
+            Message::EditorAttendeeDraft(v) => {
+                // The book is read again whenever a new attendee is begun, so
+                // a contact added in Circle meanwhile is offered; matching
+                // runs against the copy in memory on every key.
+                let starting = self
+                    .editor
+                    .as_ref()
+                    .is_some_and(|e| e.attendee_draft.is_empty());
+                let book = self.address_book.clone();
+                self.with_editor(|e| e.type_attendee(v, &book));
+                if starting && !self.address_book_loading {
+                    self.address_book_loading = true;
+                    return load_address_book();
+                }
+            }
+            Message::EditorAttendeePicked(index) => self.with_editor(|e| e.pick_attendee(index)),
+            Message::AddressBookLoaded(book) => {
+                self.address_book_loading = false;
+                self.address_book = book;
+                let book = self.address_book.clone();
+                if let Some(editor) = self.editor.as_mut()
+                    && !editor.attendee_draft.is_empty()
+                {
+                    let text = editor.attendee_draft.clone();
+                    editor.type_attendee(text, &book);
+                }
+            }
             Message::EditorAttendeeAdd => self.with_editor(|e| {
                 let email = crate::model::normalise_address(&e.attendee_draft);
                 // An address needs an @ to be worth sending to a server; the
@@ -2280,6 +2317,7 @@ impl cosmic::Application for AppModel {
                     e.availability = None;
                 }
                 e.attendee_draft.clear();
+                e.attendee_suggestions.clear();
             }),
             Message::EditorAttendeeRemove(index) => self.with_editor(|e| {
                 if index < e.attendees.len() {
@@ -5765,6 +5803,19 @@ const ACCOUNTS_FILE_CHECK: std::time::Duration = std::time::Duration::from_secs(
 /// What identifies one version of a file on disk: its size and its
 /// modification time. `None` when there is no file.
 type Stamp = Option<(u64, std::time::SystemTime)>;
+
+/// Reads the address book off the UI thread, for attendee completion.
+fn load_address_book() -> Task<cosmic::Action<Message>> {
+    cosmic::task::future(async {
+        let book = tokio::task::spawn_blocking(cosmic_pim_core::recipients::read_address_book)
+            .await
+            .unwrap_or_else(|why| {
+                tracing::warn!(%why, "the address book could not be read");
+                Vec::new()
+            });
+        Message::AddressBookLoaded(std::sync::Arc::new(book))
+    })
+}
 
 /// The account list's stamp, as it is on disk now.
 fn accounts_file_stamp() -> Stamp {

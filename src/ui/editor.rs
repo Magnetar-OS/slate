@@ -85,6 +85,9 @@ pub struct Editor {
     pub attendees: Vec<crate::model::Attendee>,
     /// The address being typed into the add field.
     pub attendee_draft: String,
+    /// The address book's matches for what is being typed there, minus who
+    /// is already invited.
+    pub attendee_suggestions: Vec<cosmic_pim_core::recipients::Known>,
     /// What the server last said about the attendees' availability, if asked.
     pub availability: Option<AvailabilityView>,
     /// True while a free/busy request is in flight.
@@ -272,6 +275,7 @@ impl Editor {
             other_alarms: Vec::new(),
             attendees: Vec::new(),
             attendee_draft: String::new(),
+            attendee_suggestions: Vec::new(),
             availability: None,
             checking_availability: false,
         }
@@ -382,6 +386,7 @@ impl Editor {
             other_alarms: Vec::new(),
             attendees: event.attendees.clone(),
             attendee_draft: String::new(),
+            attendee_suggestions: Vec::new(),
             availability: None,
             checking_availability: false,
             original: Some(event.clone()),
@@ -925,6 +930,24 @@ impl Editor {
                     .width(Length::Fixed(220.0)),
             ),
         );
+        // The address book's matches, under the field: a pick invites them
+        // by name, without typing the rest of the address.
+        for (index, known) in self.attendee_suggestions.iter().enumerate() {
+            let mut row = widget::settings::item::builder(if known.name.is_empty() {
+                known.address.clone()
+            } else {
+                known.name.clone()
+            });
+            if !known.name.is_empty() {
+                row = row.description(known.address.clone());
+            }
+            section = section.add(
+                row.control(
+                    widget::button::icon(widget::icon::from_name("list-add-symbolic"))
+                        .on_press(Message::EditorAttendeePicked(index)),
+                ),
+            );
+        }
 
         let mut column = widget::column::with_capacity(3)
             .spacing(spacing.space_xxs)
@@ -962,6 +985,45 @@ impl Editor {
         }
 
         column.into()
+    }
+
+    /// The attendee field was edited: keep the text, and offer the address
+    /// book's matches for it — none for somebody already invited.
+    pub fn type_attendee(&mut self, text: String, book: &[cosmic_pim_core::recipients::Known]) {
+        self.attendee_suggestions = cosmic_pim_core::recipients::complete(book, &text)
+            .into_iter()
+            .filter(|known| {
+                let address = crate::model::normalise_address(&known.address);
+                !self
+                    .attendees
+                    .iter()
+                    .any(|attendee| attendee.email == address)
+            })
+            .collect();
+        self.attendee_draft = text;
+    }
+
+    /// One of the address book's matches was picked: they are invited, under
+    /// the name the address book has for them, and the field is cleared for
+    /// the next.
+    pub fn pick_attendee(&mut self, index: usize) {
+        let Some(known) = self.attendee_suggestions.get(index).cloned() else {
+            return;
+        };
+        let email = crate::model::normalise_address(&known.address);
+        if !self
+            .attendees
+            .iter()
+            .any(|attendee| attendee.email == email)
+        {
+            let name = Some(known.name).filter(|name| !name.trim().is_empty());
+            self.attendees
+                .push(crate::model::Attendee::new(&email, name));
+            // The answer on screen no longer covers everyone.
+            self.availability = None;
+        }
+        self.attendee_draft.clear();
+        self.attendee_suggestions.clear();
     }
 
     /// One attendee's availability, as a line to sit under their name.
@@ -1122,6 +1184,79 @@ mod tests {
         );
         editor.availability = Some(AvailabilityView::Answers(answers));
         editor
+    }
+
+    fn book() -> Vec<cosmic_pim_core::recipients::Known> {
+        let known = |name: &str, address: &str| cosmic_pim_core::recipients::Known {
+            name: name.into(),
+            address: address.into(),
+        };
+        vec![
+            known("Ada Lovelace", "ada@analytical.example"),
+            known("Ada Lovelace", "ada@home.example"),
+            known("Grace Hopper", "grace@navy.example"),
+            known("", "noname@example.com"),
+        ]
+    }
+
+    #[test]
+    fn typing_an_attendee_offers_the_address_books_matches() {
+        let mut editor = with_availability(Vec::new());
+        editor.type_attendee("ada".into(), &book());
+
+        let offered: Vec<&str> = editor
+            .attendee_suggestions
+            .iter()
+            .map(|known| known.address.as_str())
+            .collect();
+        assert_eq!(offered, ["ada@analytical.example", "ada@home.example"]);
+        assert_eq!(editor.attendee_draft, "ada");
+
+        // One letter is not enough to guess from.
+        editor.type_attendee("a".into(), &book());
+        assert_eq!(editor.attendee_suggestions, []);
+    }
+
+    #[test]
+    fn a_picked_match_is_invited_by_name_and_the_field_clears() {
+        let mut editor = with_availability(Vec::new());
+        editor.type_attendee("grace".into(), &book());
+        editor.pick_attendee(0);
+
+        assert_eq!(editor.attendees.len(), 1);
+        assert_eq!(editor.attendees[0].email, "grace@navy.example");
+        assert_eq!(editor.attendees[0].name.as_deref(), Some("Grace Hopper"));
+        assert_eq!(editor.attendee_draft, "");
+        assert_eq!(editor.attendee_suggestions, []);
+        assert!(
+            editor.availability.is_none(),
+            "an answer that no longer covers everyone was kept"
+        );
+
+        // A card with no name is invited by its address alone.
+        editor.type_attendee("noname".into(), &book());
+        editor.pick_attendee(0);
+        assert_eq!(editor.attendees[1].name, None);
+    }
+
+    #[test]
+    fn somebody_already_invited_is_not_offered_again() {
+        let mut editor = with_availability(Vec::new());
+        editor
+            .attendees
+            .push(crate::model::Attendee::new("ADA@home.example", None));
+        editor.type_attendee("lovelace".into(), &book());
+
+        let offered: Vec<&str> = editor
+            .attendee_suggestions
+            .iter()
+            .map(|known| known.address.as_str())
+            .collect();
+        assert_eq!(offered, ["ada@analytical.example"]);
+
+        // A pick past the end, from a list that changed under it, does nothing.
+        editor.pick_attendee(5);
+        assert_eq!(editor.attendees.len(), 1);
     }
 
     #[test]

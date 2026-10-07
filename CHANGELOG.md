@@ -25,6 +25,15 @@ All notable user-facing changes to Slate. The format follows
   `~/.local/share` for a per-user install — with its program linked in beside
   it, and the manifest is one pop-launcher loads.
 
+### Changed
+
+- Built against cosmic-pim 3.0.0 and libcosmic `60ad2cc`. An account made
+  from a provider manifest (Google, Fastmail, …) now finds its address books
+  as well as its calendars.
+- The Accounts page shows where such an account's calendars are. cosmic-pim
+  3 stores it without an address of its own, and its row showed only the
+  login followed by a dangling separator.
+
 ## [1.2.3] - 2026-10-03
 
 ### Changed

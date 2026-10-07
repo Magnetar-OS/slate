@@ -17,10 +17,20 @@ use crate::app::{AccountForm, ConflictRow, Message, SubscriptionForm};
 use crate::fl;
 use crate::model::CalendarMeta;
 
+/// The stored accounts, and the provider manifests their rows are described
+/// with.
+pub struct Accounts<'a> {
+    pub list: &'a [cosmic_pim_accounts::Account],
+    pub providers: &'a cosmic_pim_accounts::Registry,
+}
+
 /// One row per account, plus the add form or the button that opens it —
 /// followed by ICS subscriptions and any sync conflicts awaiting an answer.
 pub fn view<'a>(
-    accounts: &'a [cosmic_pim_accounts::Account],
+    Accounts {
+        list: accounts,
+        providers,
+    }: Accounts<'a>,
     form: Option<&'a AccountForm>,
     syncing: bool,
     status: Option<&'a str>,
@@ -43,7 +53,7 @@ pub fn view<'a>(
         for account in accounts {
             list = list.add(
                 widget::settings::item::builder(account.display_name.clone())
-                    .description(format!("{} · {}", account.username, account.url))
+                    .description(describe(account, providers))
                     .control(
                         widget::button::text(fl!("remove"))
                             .class(cosmic::theme::Button::Destructive)
@@ -451,10 +461,58 @@ fn add_form(form: &AccountForm) -> Element<'_, Message> {
         .into()
 }
 
+/// An account's row subtitle: its login, and where its calendars are.
+fn describe(
+    account: &cosmic_pim_accounts::Account,
+    providers: &cosmic_pim_accounts::Registry,
+) -> String {
+    match calendar_address(account, providers) {
+        Some(address) => format!("{} · {address}", account.username),
+        None => account.username.clone(),
+    }
+}
+
+/// Where an account's calendars are: the address it was given, or — for an
+/// account made from a provider, which cosmic-pim 3 stores without one — the
+/// provider's calendar address for its login.
+fn calendar_address(
+    account: &cosmic_pim_accounts::Account,
+    providers: &cosmic_pim_accounts::Registry,
+) -> Option<String> {
+    if !account.url.trim().is_empty() {
+        return Some(account.url.clone());
+    }
+    account
+        .provider
+        .as_deref()
+        .and_then(|id| providers.get(id))
+        .and_then(|provider| provider.calendar_url(&account.username))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cosmic_pim_caldav::ConflictKind;
+
+    #[test]
+    fn a_provider_account_shows_its_providers_calendar_address() {
+        // cosmic-pim 3 stores an account made from a provider with no URL of
+        // its own; the row showed "ada@gmail.com · " and nothing after it.
+        let providers =
+            cosmic_pim_accounts::Registry::load_from(std::path::Path::new("/nonexistent"));
+        let mut google = cosmic_pim_accounts::Account::new("Ada", "", "ada@gmail.com");
+        google.provider = Some("google".into());
+        assert_eq!(
+            describe(&google, &providers),
+            "ada@gmail.com · https://apidata.googleusercontent.com/caldav/v2/"
+        );
+
+        let own = cosmic_pim_accounts::Account::new("Home", "https://dav.example/", "ada");
+        assert_eq!(describe(&own, &providers), "ada · https://dav.example/");
+
+        let nowhere = cosmic_pim_accounts::Account::new("Mail only", "", "ada@uni.example");
+        assert_eq!(describe(&nowhere, &providers), "ada@uni.example");
+    }
 
     fn row(kind: ConflictKind) -> ConflictRow {
         ConflictRow {

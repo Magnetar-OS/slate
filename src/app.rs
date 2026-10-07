@@ -124,6 +124,9 @@ pub struct AppModel {
     /// so an account added in another application is noticed.
     accounts_stamp: Stamp,
     account_form: Option<AccountForm>,
+    /// The provider manifests, read once: what an account made from a
+    /// provider is shown with, since it carries no address of its own.
+    providers: cosmic_pim_accounts::Registry,
     syncing: bool,
     /// Loaded on demand for the Tasks view.
     todos: Vec<crate::model::Todo>,
@@ -1073,6 +1076,7 @@ impl cosmic::Application for AppModel {
                 }
             },
             account_form: None,
+            providers: cosmic_pim_accounts::Registry::load(),
             syncing: false,
             todos: Vec::new(),
             show_done_tasks: false,
@@ -1509,7 +1513,10 @@ impl cosmic::Application for AppModel {
             }),
             ContextPage::Accounts => context_drawer::context_drawer(
                 crate::ui::accounts::view(
-                    self.accounts.as_ref().map_or(&[], |a| a.accounts()),
+                    crate::ui::accounts::Accounts {
+                        list: self.accounts.as_ref().map_or(&[], |a| a.accounts()),
+                        providers: &self.providers,
+                    },
                     self.account_form.as_ref(),
                     self.syncing,
                     self.sync_status.as_deref(),

@@ -122,7 +122,7 @@ pub struct AppModel {
     accounts: Option<cosmic_pim_accounts::AccountStore>,
     /// The account list's size and modification time when it was last read,
     /// so an account added in another application is noticed.
-    accounts_stamp: Stamp,
+    accounts_stamp: cosmic_pim_accounts::FileStamp,
     account_form: Option<AccountForm>,
     /// The address book attendees complete from, as last read. Empty until
     /// the first attendee is typed.
@@ -1076,7 +1076,7 @@ impl cosmic::Application for AppModel {
             sidebar_rail: false,
             editor: None,
             new_calendar_name: None,
-            accounts_stamp: accounts_file_stamp(),
+            accounts_stamp: cosmic_pim_accounts::FileStamp::accounts_file(),
             accounts: match cosmic_pim_accounts::AccountStore::open_default() {
                 Ok(accounts) => Some(accounts),
                 Err(why) => {
@@ -1711,7 +1711,8 @@ impl cosmic::Application for AppModel {
             // Accounts are the suite's: one added in the Accounts window, or
             // in Envelope or Circle, appears here without a restart. A `stat`
             // every two seconds.
-            cosmic::iced::time::every(ACCOUNTS_FILE_CHECK).map(|_| Message::AccountsFileCheck),
+            cosmic::iced::time::every(cosmic_pim_accounts::account::ACCOUNTS_FILE_CHECK_INTERVAL)
+                .map(|_| Message::AccountsFileCheck),
             // Only `Ignored` presses: a focused text input has already claimed
             // anything it wants, so the editor keeps its arrow keys.
             cosmic::iced::event::listen_with(|event, status, _window| match (event, status) {
@@ -2009,7 +2010,7 @@ impl cosmic::Application for AppModel {
             }
             Message::AccountsFileCheck => {
                 let path = cosmic_pim_accounts::account::default_config_path();
-                if stamp_changed(&mut self.accounts_stamp, &path) {
+                if self.accounts_stamp.changed(&path) {
                     return self.accounts_file_changed();
                 }
             }
@@ -5795,15 +5796,6 @@ fn add_account_elsewhere(form: &mut Option<AccountForm>, program: &str) {
     }
 }
 
-/// How often to look whether the shared account list changed. A `stat`, so
-/// cheap enough to do this often: an account added in the Accounts window
-/// should appear here before the person has finished switching windows.
-const ACCOUNTS_FILE_CHECK: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// What identifies one version of a file on disk: its size and its
-/// modification time. `None` when there is no file.
-type Stamp = Option<(u64, std::time::SystemTime)>;
-
 /// Reads the address book off the UI thread, for attendee completion.
 fn load_address_book() -> Task<cosmic::Action<Message>> {
     cosmic::task::future(async {
@@ -5815,30 +5807,6 @@ fn load_address_book() -> Task<cosmic::Action<Message>> {
             });
         Message::AddressBookLoaded(std::sync::Arc::new(book))
     })
-}
-
-/// The account list's stamp, as it is on disk now.
-fn accounts_file_stamp() -> Stamp {
-    file_stamp(&cosmic_pim_accounts::account::default_config_path())
-}
-
-fn file_stamp(path: &std::path::Path) -> Stamp {
-    let metadata = std::fs::metadata(path).ok()?;
-    Some((metadata.len(), metadata.modified().ok()?))
-}
-
-/// Whether the file at `path` is a different version from the one `last`
-/// names, which is brought up to date.
-///
-/// However many times the file was written since the last look, that is one
-/// change: the list is read once per look, not once per write.
-fn stamp_changed(last: &mut Stamp, path: &std::path::Path) -> bool {
-    let now = file_stamp(path);
-    if now == *last {
-        return false;
-    }
-    *last = now;
-    true
 }
 
 /// Whether `accounts` holds one whose id is not among `known`.
@@ -5856,52 +5824,6 @@ mod tests {
 
     fn at(y: i32, m: u32, d: u32, h: u32, min: u32) -> NaiveDateTime {
         day(y, m, d).and_hms_opt(h, min, 0).unwrap()
-    }
-
-    #[test]
-    fn a_change_to_the_account_list_changes_its_stamp() {
-        // The stamp is how an account added in the Accounts window reaches
-        // the accounts page without a restart.
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("accounts.toml");
-        assert_eq!(file_stamp(&path), None);
-
-        std::fs::write(&path, "").unwrap();
-        let empty = file_stamp(&path);
-        std::fs::write(&path, "[[account]]\nid = \"a\"\n").unwrap();
-
-        assert!(empty.is_some());
-        assert_ne!(file_stamp(&path), empty);
-    }
-
-    #[test]
-    fn the_account_list_is_read_once_per_look_however_often_it_was_written() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("accounts.toml");
-        let mut last = file_stamp(&path);
-
-        // Nothing there, nothing written: nothing to read.
-        assert!(!stamp_changed(&mut last, &path));
-
-        // The Accounts window adding an account is several writes: the
-        // account, then what discovery found for it.
-        std::fs::write(&path, "[[account]]\nid = \"a\"\n").unwrap();
-        std::fs::write(
-            &path,
-            "[[account]]\nid = \"a\"\nurl = \"https://dav.example\"\n",
-        )
-        .unwrap();
-        assert!(stamp_changed(&mut last, &path));
-        assert!(
-            !stamp_changed(&mut last, &path),
-            "one change was read twice"
-        );
-        assert!(!stamp_changed(&mut last, &path));
-
-        // Every account removed, and the file with them.
-        std::fs::remove_file(&path).unwrap();
-        assert!(stamp_changed(&mut last, &path));
-        assert!(!stamp_changed(&mut last, &path));
     }
 
     #[test]

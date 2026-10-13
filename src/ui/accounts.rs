@@ -441,7 +441,8 @@ fn add_form(form: &AccountForm) -> Element<'_, Message> {
 
     // A URL and a username are the minimum that could possibly work; an empty
     // password is left submittable because some servers genuinely use none.
-    let can_submit = !form.url.trim().is_empty() && !form.username.trim().is_empty();
+    let can_submit =
+        !form.adding && !form.url.trim().is_empty() && !form.username.trim().is_empty();
 
     column
         .push(
@@ -449,8 +450,12 @@ fn add_form(form: &AccountForm) -> Element<'_, Message> {
                 .spacing(spacing.space_xs)
                 .push(widget::button::text(fl!("cancel")).on_press(Message::AccountAddCancel))
                 .push({
-                    let add =
-                        widget::button::text(fl!("add")).class(cosmic::theme::Button::Suggested);
+                    let label = if form.adding {
+                        fl!("adding-server")
+                    } else {
+                        fl!("add")
+                    };
+                    let add = widget::button::text(label).class(cosmic::theme::Button::Suggested);
                     if can_submit {
                         add.on_press(Message::AccountAddConfirm)
                     } else {

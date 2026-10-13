@@ -23,6 +23,10 @@ All notable user-facing changes to Slate. The format follows
 
 ### Fixed
 
+- Add a server signs in to the server before it saves the account. A wrong
+  password used to be saved as typed and fail later as a sync error; now the
+  form stays open and says the server did not accept it. A server with
+  address books but no calendars is accepted too.
 - `cal standup` in the COSMIC launcher finds the standup. It never had: the
   launcher plugin was installed under `/usr/share`, where pop-launcher does
   not look, and its manifest was written in a form pop-launcher refuses to

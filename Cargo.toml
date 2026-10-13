@@ -150,3 +150,5 @@ strip = true
 pop-launcher = "1.2.7"
 # Temporary directories for the private test bus and for on-disk state.
 tempfile = "3.27"
+# The WebDAV stand-in checks the Basic login it is sent. Already in the graph.
+base64 = "0.22"

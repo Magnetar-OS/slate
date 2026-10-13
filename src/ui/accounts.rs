@@ -461,32 +461,18 @@ fn add_form(form: &AccountForm) -> Element<'_, Message> {
         .into()
 }
 
-/// An account's row subtitle: its login, and where its calendars are.
+/// An account's row subtitle: its login, and where its calendars are — the
+/// address the sync pass starts at, by the engine's own rule: the account's
+/// URL, or for an account made from a provider, the provider's calendar
+/// address for its login.
 fn describe(
     account: &cosmic_pim_accounts::Account,
     providers: &cosmic_pim_accounts::Registry,
 ) -> String {
-    match calendar_address(account, providers) {
+    match account.service_url(providers, cosmic_pim_accounts::DavService::Calendar) {
         Some(address) => format!("{} · {address}", account.username),
         None => account.username.clone(),
     }
-}
-
-/// Where an account's calendars are: the address it was given, or — for an
-/// account made from a provider, which cosmic-pim 3 stores without one — the
-/// provider's calendar address for its login.
-fn calendar_address(
-    account: &cosmic_pim_accounts::Account,
-    providers: &cosmic_pim_accounts::Registry,
-) -> Option<String> {
-    if !account.url.trim().is_empty() {
-        return Some(account.url.clone());
-    }
-    account
-        .provider
-        .as_deref()
-        .and_then(|id| providers.get(id))
-        .and_then(|provider| provider.calendar_url(&account.username))
 }
 
 #[cfg(test)]

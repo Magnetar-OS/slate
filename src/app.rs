@@ -3635,12 +3635,11 @@ impl AppModel {
         }
 
         self.with_account_form(|f| f.adding = true);
-        let registry = self.providers.clone();
         cosmic::task::future(async move {
             let result = tokio::task::spawn_blocking(move || {
                 let mut store = cosmic_pim_accounts::AccountStore::open_default()
                     .map_err(|why| ServerNotAdded::Failed(why.to_string()))?;
-                add_server(&mut store, &registry, &form).map(drop)
+                add_server(&mut store, &form).map(drop)
             })
             .await
             .unwrap_or_else(|why| Err(ServerNotAdded::Failed(why.to_string())));
@@ -5834,38 +5833,30 @@ fn is_loopback(url: &str) -> bool {
 }
 
 /// Stores the account the server form describes, once the server at its
-/// address has taken the login: `setup::add_with_dav_url` finds the principal
+/// address has taken the login: `setup::add_with_dav_login` finds the principal
 /// and the calendar home — or, on a contacts-only server, the address book
 /// home — with the password before anything is written. A password stored
-/// untried failed later as a sync error, far from the form. Blocking.
+/// untried failed later as a sync error, far from the form. An empty name
+/// means the login. Blocking.
 ///
 /// Returns the new account's id.
 fn add_server(
     store: &mut cosmic_pim_accounts::AccountStore,
-    registry: &cosmic_pim_accounts::Registry,
     form: &AccountForm,
 ) -> Result<String, ServerNotAdded> {
     use cosmic_pim_sync::setup::{self, SetupError};
 
     let login = form.username.trim();
-    let name = match form.display_name.trim() {
-        "" => login,
-        name => name,
-    };
-    // A plan starts from an email address, and this form has a login and a
-    // server instead. The plan's address is only a fallback for the name and
-    // the login, and both are passed, so it is never what is stored: the
-    // login when it is an address, else the login at a reserved domain.
-    let plan = setup::plan(registry, login, false)
-        .or_else(|| setup::plan(registry, &format!("{login}@server.invalid"), false))
-        .ok_or_else(|| ServerNotAdded::Failed(fl!("error-no-username")))?;
+    if login.is_empty() {
+        return Err(ServerNotAdded::Failed(fl!("error-no-username")));
+    }
 
-    setup::add_with_dav_url(store, &plan, name, &form.url, login, &form.password).map_err(|why| {
-        match why {
+    setup::add_with_dav_login(store, &form.display_name, &form.url, login, &form.password).map_err(
+        |why| match why {
             SetupError::Rejected(_) => ServerNotAdded::Refused,
             why => ServerNotAdded::Failed(why.to_string()),
-        }
-    })
+        },
+    )
 }
 
 /// Takes the server's answer into the form: closed when the account was
@@ -6056,11 +6047,10 @@ mod tests {
     fn a_server_that_takes_the_login_is_stored() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = private_store(dir.path());
-        let registry = cosmic_pim_accounts::Registry::load_from(dir.path());
         let url = dav_server("right", true);
 
-        let id = add_server(&mut store, &registry, &server_form(&url, "right"))
-            .expect("the server took the login");
+        let id =
+            add_server(&mut store, &server_form(&url, "right")).expect("the server took the login");
 
         let account = store.get(&id).expect("stored");
         assert_eq!(account.display_name, "Home");
@@ -6075,13 +6065,12 @@ mod tests {
     fn a_server_with_address_books_only_is_stored_under_the_login_as_its_name() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = private_store(dir.path());
-        let registry = cosmic_pim_accounts::Registry::load_from(dir.path());
         let form = AccountForm {
             display_name: "  ".into(),
             ..server_form(&dav_server("right", false), "right")
         };
 
-        let id = add_server(&mut store, &registry, &form).expect("accepted");
+        let id = add_server(&mut store, &form).expect("accepted");
 
         assert_eq!(store.get(&id).expect("stored").display_name, "ada");
     }
@@ -6091,12 +6080,30 @@ mod tests {
         // It used to be stored as typed, and failed later as a sync error.
         let dir = tempfile::tempdir().expect("tempdir");
         let mut store = private_store(dir.path());
-        let registry = cosmic_pim_accounts::Registry::load_from(dir.path());
         let url = dav_server("right", true);
 
-        let refused = add_server(&mut store, &registry, &server_form(&url, "wrong"));
+        let refused = add_server(&mut store, &server_form(&url, "wrong"));
 
         assert_eq!(refused, Err(ServerNotAdded::Refused));
+        assert_eq!(store.accounts(), []);
+    }
+
+    #[test]
+    fn a_server_form_without_a_login_asks_for_one_before_any_request() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut store = private_store(dir.path());
+        // Nothing listens here: a request would fail as unreachable instead.
+        let form = AccountForm {
+            username: "  ".into(),
+            ..server_form("http://127.0.0.1:9/", "right")
+        };
+
+        let refused = add_server(&mut store, &form);
+
+        assert_eq!(
+            refused,
+            Err(ServerNotAdded::Failed(fl!("error-no-username")))
+        );
         assert_eq!(store.accounts(), []);
     }
 

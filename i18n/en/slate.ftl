@@ -293,6 +293,8 @@ no-subscriptions-description = Subscribe to a public calendar feed — holidays,
 error-feed-scheme = The feed address must start with https:// or webcal://
 remove-subscription-title = Remove this subscription?
 remove-subscription-body = “{ $name }” will be removed from your calendar list. Subscribing to the same address again restores it.
+manage-in-accounts = Manage in Accounts…
+online-account-kept-elsewhere = “{ $name }” comes from GNOME Online Accounts, and removing it here would not last: it is linked again from there. Remove it in GNOME Online Accounts, or install the Accounts app to manage it.
 remove-account-title = Remove this account?
 remove-account-body = “{ $name }” will be removed from every Magnetar app that uses it — mail and contacts as well as calendars — and its saved password will be forgotten. The events already on this computer stay.
 

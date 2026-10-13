@@ -254,6 +254,9 @@ pub enum Message {
     AccountAddStart,
     AccountAddCancel,
     AccountAddConfirm,
+    /// Opens the Accounts window for an account GNOME Online Accounts keeps,
+    /// which is where it is removed.
+    AccountManageElsewhere(String),
     /// The server form's account is stored, or why not.
     AccountAddFinished(Result<(), ServerNotAdded>),
     AccountNameChanged(String),
@@ -2163,6 +2166,12 @@ impl cosmic::Application for AppModel {
             Message::CalendarDeleteCancel => self.pending_calendar_removal = None,
             Message::CalendarDeleteConfirm => return self.delete_local_calendar(),
 
+            // Removed here, an account GNOME Online Accounts keeps comes back
+            // at the next link; it is removed where it is kept.
+            Message::AccountRemoveRequest(id) if self.is_online_account(&id) => {
+                return self.manage_online_account(&id);
+            }
+            Message::AccountManageElsewhere(id) => return self.manage_online_account(&id),
             Message::AccountRemoveRequest(id) => self.pending_account_removal = Some(id),
             Message::AccountRemoveCancel => self.pending_account_removal = None,
             Message::AccountRemoveConfirm => {
@@ -3574,6 +3583,29 @@ impl AppModel {
             return self.sync_now();
         }
         Task::none()
+    }
+
+    /// Opens the Accounts window for the account `id`, or says where it is
+    /// kept when that is not installed.
+    fn manage_online_account(&mut self, id: &str) -> Task<cosmic::Action<Message>> {
+        let name = self
+            .accounts
+            .iter()
+            .flat_map(cosmic_pim_accounts::AccountStore::accounts)
+            .find(|account| account.id == id)
+            .map_or_else(|| id.to_owned(), |account| account.display_name.clone());
+        match manage_elsewhere(crate::handoff::ACCOUNTS_WINDOW, &name) {
+            Some(said) => self.toast_info(&said),
+            None => Task::none(),
+        }
+    }
+
+    /// Whether GNOME Online Accounts keeps the account `id`.
+    fn is_online_account(&self, id: &str) -> bool {
+        self.accounts
+            .iter()
+            .flat_map(cosmic_pim_accounts::AccountStore::accounts)
+            .any(|account| account.id == id && account.online_account().is_some())
     }
 
     /// Validates the add-account form, and on a worker stores the account
@@ -5859,6 +5891,15 @@ fn server_added(form: &mut Option<AccountForm>, result: Result<(), ServerNotAdde
     }
 }
 
+/// Opens the Accounts window (`program`) to manage the account called `name`,
+/// which GNOME Online Accounts keeps. Where it cannot be started, what to
+/// say instead: where the account is kept, and why it is not removed here.
+fn manage_elsewhere(program: &str, name: &str) -> Option<String> {
+    let why = crate::handoff::start(crate::handoff::manage_accounts(program)).err()?;
+    tracing::info!(%why, "no Accounts window to manage an online account in");
+    Some(fl!("online-account-kept-elsewhere", name = name))
+}
+
 /// What Add account does: starts the desktop's Accounts window, which takes
 /// an address and works out the rest. Where `program` cannot be started —
 /// the Accounts window is a package of its own, and may not be installed —
@@ -6087,6 +6128,16 @@ mod tests {
 
         assert!(server_added(&mut form, Ok(())));
         assert!(form.is_none(), "an added account closes the form");
+    }
+
+    #[test]
+    fn an_online_account_is_managed_in_the_accounts_window_or_said_to_be_kept_there() {
+        assert_eq!(manage_elsewhere("true", "Ada at Google"), None);
+
+        let said = manage_elsewhere("/nonexistent/magnetar-accounts", "Ada at Google")
+            .expect("something to say");
+        assert!(said.contains("GNOME Online Accounts"), "{said}");
+        assert!(said.contains("Ada at Google"), "{said}");
     }
 
     #[test]

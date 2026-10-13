@@ -20,6 +20,10 @@ All notable user-facing changes to Slate. The format follows
   their name; somebody already invited is not offered again. The book is
   read again each time a new attendee is begun, so a contact added
   meanwhile is offered.
+- An account GNOME Online Accounts keeps has a Manage in Accounts button
+  instead of Remove: it opens the Accounts window, where it is removed.
+  Removed here, it was linked again from GNOME Online Accounts. Without the
+  Accounts window installed, Slate says where the account is kept.
 
 ### Fixed
 

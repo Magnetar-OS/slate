@@ -51,14 +51,20 @@ pub fn view<'a>(
     if !accounts.is_empty() {
         let mut list = widget::settings::section();
         for account in accounts {
+            // Removed here, an account GNOME Online Accounts keeps would be
+            // linked again; the Accounts window is where it goes.
+            let control = if account.online_account().is_some() {
+                widget::button::text(fl!("manage-in-accounts"))
+                    .on_press(Message::AccountManageElsewhere(account.id.clone()))
+            } else {
+                widget::button::text(fl!("remove"))
+                    .class(cosmic::theme::Button::Destructive)
+                    .on_press(Message::AccountRemoveRequest(account.id.clone()))
+            };
             list = list.add(
                 widget::settings::item::builder(account.display_name.clone())
                     .description(describe(account, providers))
-                    .control(
-                        widget::button::text(fl!("remove"))
-                            .class(cosmic::theme::Button::Destructive)
-                            .on_press(Message::AccountRemoveRequest(account.id.clone())),
-                    ),
+                    .control(control),
             );
         }
         column = column.push(list);

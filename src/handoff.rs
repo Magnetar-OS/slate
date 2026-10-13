@@ -20,6 +20,13 @@ pub fn add_account(program: &str) -> Command {
     command
 }
 
+/// The command that opens the Accounts window on its list, where an account
+/// GNOME Online Accounts keeps is managed.
+#[must_use]
+pub fn manage_accounts(program: &str) -> Command {
+    Command::new(program)
+}
+
 /// Starts `command` and leaves it running.
 ///
 /// # Errors
@@ -46,6 +53,14 @@ mod tests {
 
         assert_eq!(command.get_program(), "magnetar-accounts");
         assert_eq!(command.get_args().collect::<Vec<_>>(), ["--for=calendar"]);
+    }
+
+    #[test]
+    fn the_accounts_window_is_opened_on_its_list_to_manage_an_account() {
+        let command = manage_accounts(ACCOUNTS_WINDOW);
+
+        assert_eq!(command.get_program(), "magnetar-accounts");
+        assert_eq!(command.get_args().count(), 0);
     }
 
     #[test]

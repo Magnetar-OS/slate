@@ -40,7 +40,7 @@ All notable user-facing changes to Slate. The format follows
 
 ### Changed
 
-- Built against cosmic-pim 3.1.0 and libcosmic `a6ac45c`. An account made
+- Built against cosmic-pim 3.2.0 and libcosmic `a6ac45c`. An account made
   from a provider manifest (Google, Fastmail, …) now finds its address books
   as well as its calendars. A calendar server that refuses the password is
   reported as refusing it, not as a server that could not be reached.

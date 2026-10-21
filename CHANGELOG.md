@@ -5,6 +5,15 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Rebuilt against the current COSMIC libraries (libcosmic `430f3d4`) with
+  Rust 1.99.1.
+- Escape pressed in a text field now does what Escape does elsewhere in the
+  window — closes quick add, closes the side drawer with the event or
+  task editor in it, or clears the search. It used to only take the focus out
+  of the field, so it took a second press.
+
 ## [1.3.0] - 2026-10-13
 
 ### Added

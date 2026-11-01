@@ -11,6 +11,7 @@ use crate::ui::{month::MonthView, sidebar::Sidebar, timegrid::TimeGrid};
 use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use cosmic::app::context_drawer;
 use cosmic::cosmic_config::{self, CosmicConfigEntry};
+use cosmic::iced::core::text::{Ellipsize, EllipsizeHeightLimit, Wrapping};
 use cosmic::iced::{Alignment, Length, Subscription, futures};
 use cosmic::prelude::*;
 use cosmic::widget::{self, about::About, menu, nav_bar, segmented_button};
@@ -1223,10 +1224,9 @@ impl cosmic::Application for AppModel {
                 ),
             ),
         ])
-        // Envelope's menu geometry, for the same reasons: the default
-        // `Uniform(30)` height gives every divider a full row, and the default
-        // 150 width ellipsizes labels and leaves the shortcut column no room.
-        .item_height(menu::ItemHeight::Dynamic(36))
+        // The default 150 width ellipsizes labels and leaves the shortcut
+        // column no room. Item height is left to libcosmic, whose default
+        // has been dynamic since fcb3865.
         .item_width(menu::ItemWidth::Uniform(260));
 
         let spacing = cosmic::theme::spacing();
@@ -1297,11 +1297,18 @@ impl cosmic::Application for AppModel {
         }
 
         vec![
-            row.push(widget::text::heading(crate::ui::range_title(
-                self.view(),
-                self.anchor,
-                &self.config,
-            )))
+            // One line, ellipsized: a week that spans two months is long
+            // enough to wrap in the header's centre slot, which then draws
+            // two lines in a 32px row.
+            row.push(
+                widget::text::heading(crate::ui::range_title(
+                    self.view(),
+                    self.anchor,
+                    &self.config,
+                ))
+                .wrapping(Wrapping::None)
+                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+            )
             .into(),
         ]
     }
@@ -3361,7 +3368,8 @@ impl AppModel {
             .push(general)
             .push(self.local_calendars_view())
             .push(self.calendar_defaults_view())
-            .apply(widget::scrollable)
+            // The context drawer scrolls this; a scrollable of its own here
+            // could never scroll.
             .into()
     }
 

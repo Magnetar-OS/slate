@@ -34,6 +34,10 @@ const WORK_END: u32 = 18;
 /// Height of the resize grip along a block's bottom edge.
 const RESIZE_GRIP: f32 = 6.0;
 
+/// Width of libcosmic's vertical scrollbar (`scrollable::vertical`'s
+/// `Scrollbar::width(8)`), which is drawn over the content.
+const SCROLLBAR: u16 = 8;
+
 /// Identifies the hour-grid scrollable so the app can scroll it programmatically.
 #[must_use]
 pub fn scroll_id() -> cosmic::widget::Id {
@@ -81,15 +85,31 @@ impl<'a> TimeGrid<'a> {
     pub fn view(&self) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
 
+        // libcosmic's scrollbar floats over the content's right edge. The
+        // ruler is taller than most windows, so the bar is nearly always
+        // there; every row keeps the bar's width clear on the right, so the
+        // last day's events are never under it and the day columns of the
+        // header, the all-day band and the ruler stay aligned whether or not
+        // it shows.
+        let bar = SCROLLBAR + spacing.space_xxxs;
+
         widget::column::with_capacity(3)
             .spacing(spacing.space_xxs)
-            .push(self.header_row())
-            .push(self.all_day_band())
             .push(
-                widget::scrollable(self.hour_grid())
-                    .id(scroll_id())
-                    .height(Length::Fill)
-                    .width(Length::Fill),
+                self.header_row()
+                    .apply(widget::container)
+                    .padding([0, bar, 0, 0]),
+            )
+            .push(self.all_day_band(bar))
+            .push(
+                widget::scrollable(
+                    self.hour_grid()
+                        .apply(widget::container)
+                        .padding([0, bar, 0, 0]),
+                )
+                .id(scroll_id())
+                .height(Length::Fill)
+                .width(Length::Fill),
             )
             .padding(spacing.space_xs)
             .into()
@@ -172,7 +192,7 @@ impl<'a> TimeGrid<'a> {
 
     /// All-day events get their own band above the ruler; they have no place on
     /// an hour axis.
-    fn all_day_band(&self) -> Element<'a, Message> {
+    fn all_day_band(&self, bar: u16) -> Element<'a, Message> {
         let spacing = cosmic::theme::spacing();
 
         let has_any = self
@@ -190,7 +210,9 @@ impl<'a> TimeGrid<'a> {
                     .class(cosmic::theme::Text::Custom(dim_text))
                     .apply(widget::container)
                     .width(Length::Fixed(self.gutter_width()))
-                    .align_y(Alignment::Center),
+                    .align_x(Alignment::End)
+                    .align_y(Alignment::Center)
+                    .padding([0, 6, 0, 0]),
             );
 
         for date in self.dates() {
@@ -207,8 +229,11 @@ impl<'a> TimeGrid<'a> {
             row = row.push(column.width(Length::Fill));
         }
 
+        // Vertical padding only: a horizontal inset would shift the band's
+        // day columns off the header's and the ruler's. The label takes the
+        // corner cell's right-hand inset instead.
         row.apply(widget::container)
-            .padding(spacing.space_xxs)
+            .padding([spacing.space_xxs, bar, spacing.space_xxs, 0])
             .class(panel_surface())
             .width(Length::Fill)
             .into()

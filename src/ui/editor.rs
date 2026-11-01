@@ -547,7 +547,9 @@ impl Editor {
             .push(self.attendees_section())
             .push(self.actions());
 
-        widget::scrollable(column).into()
+        // No scrollable of its own: the context drawer already scrolls its
+        // content, and a second one inside it could never scroll.
+        column.into()
     }
 
     fn details_section<'a>(&'a self, calendars: &'a [CalendarMeta]) -> Element<'a, Message> {
@@ -909,10 +911,12 @@ impl Editor {
                 row = row.description(status);
             }
             section = section.add(
-                row.control(
+                row.control(widget::tooltip(
                     widget::button::icon(widget::icon::from_name("list-remove-symbolic"))
                         .on_press(Message::EditorAttendeeRemove(index)),
-                ),
+                    widget::text::body(fl!("remove")),
+                    widget::tooltip::Position::Bottom,
+                )),
             );
         }
 
@@ -942,10 +946,12 @@ impl Editor {
                 row = row.description(known.address.clone());
             }
             section = section.add(
-                row.control(
+                row.control(widget::tooltip(
                     widget::button::icon(widget::icon::from_name("list-add-symbolic"))
                         .on_press(Message::EditorAttendeePicked(index)),
-                ),
+                    widget::text::body(fl!("add")),
+                    widget::tooltip::Position::Bottom,
+                )),
             );
         }
 

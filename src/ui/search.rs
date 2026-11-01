@@ -65,7 +65,9 @@ impl<'a> SearchView<'a> {
 
         column
             .push(
-                widget::scrollable(list)
+                // Clear of the scrollbar, which libcosmic draws over the
+                // content's right edge; the rows' summaries do not wrap.
+                widget::scrollable(list.padding([0, spacing.space_s, 0, 0]))
                     .height(Length::Fill)
                     .width(Length::Fill),
             )

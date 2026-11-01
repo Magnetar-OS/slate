@@ -462,6 +462,38 @@ pub fn format_date_short(date: NaiveDate) -> String {
     format!("{} {}", date.day(), month_name(date.month()))
 }
 
+/// Abbreviated month name, for a range's two ends.
+#[must_use]
+fn month_short(month: u32) -> String {
+    match month {
+        1 => fl!("month-short-january"),
+        2 => fl!("month-short-february"),
+        3 => fl!("month-short-march"),
+        4 => fl!("month-short-april"),
+        5 => fl!("month-short-may"),
+        6 => fl!("month-short-june"),
+        7 => fl!("month-short-july"),
+        8 => fl!("month-short-august"),
+        9 => fl!("month-short-september"),
+        10 => fl!("month-short-october"),
+        11 => fl!("month-short-november"),
+        _ => fl!("month-short-december"),
+    }
+}
+
+/// "26 Oct – 1 Nov 2026": a range across two months, short enough for the
+/// header's centre slot. Spelt out, it ellipsized away its own year.
+fn range_across_months(start: NaiveDate, end: NaiveDate) -> String {
+    format!(
+        "{} {} – {} {} {}",
+        start.day(),
+        month_short(start.month()),
+        end.day(),
+        month_short(end.month()),
+        end.year()
+    )
+}
+
 /// A day as the app names one in running text: "Tue 4 August".
 #[must_use]
 pub fn format_day(date: NaiveDate) -> String {
@@ -489,12 +521,7 @@ pub fn range_title(view: crate::config::ViewKind, anchor: NaiveDate, config: &Co
                     end.year()
                 )
             } else {
-                format!(
-                    "{} – {} {}",
-                    format_date_short(start),
-                    format_date_short(end),
-                    end.year()
-                )
+                range_across_months(start, end)
             }
         }
         ViewKind::Day => format!(
@@ -505,12 +532,16 @@ pub fn range_title(view: crate::config::ViewKind, anchor: NaiveDate, config: &Co
         ),
         ViewKind::Agenda => {
             let end = anchor + Duration::days(ViewKind::AGENDA_DAYS - 1);
-            format!(
-                "{} – {} {}",
-                format_date_short(anchor),
-                format_date_short(end),
-                end.year()
-            )
+            if anchor.month() == end.month() {
+                format!(
+                    "{} – {} {}",
+                    anchor.day(),
+                    format_date_short(end),
+                    end.year()
+                )
+            } else {
+                range_across_months(anchor, end)
+            }
         }
         ViewKind::Year => anchor.year().to_string(),
         ViewKind::Tasks => fl!("tasks"),
@@ -615,6 +646,15 @@ mod tests {
         assert_eq!(week_start(tuesday, Weekday::Mon), day(2026, 8, 3));
         assert_eq!(week_start(tuesday, Weekday::Sun), day(2026, 8, 2));
         assert_eq!(week_start(tuesday, Weekday::Sat), day(2026, 8, 1));
+    }
+
+    #[test]
+    fn a_week_across_two_months_abbreviates_both() {
+        // 2026-10-26 is a Monday, and its week ends on 1 November.
+        let config = Config::default();
+        let title = range_title(crate::config::ViewKind::Week, day(2026, 10, 28), &config)
+            .replace(['\u{2068}', '\u{2069}'], "");
+        assert_eq!(title, "26 Oct – 1 Nov 2026");
     }
 
     #[test]

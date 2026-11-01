@@ -96,6 +96,20 @@ month-october = October
 month-november = November
 month-december = December
 
+## Abbreviated month names, for date ranges that span two months
+month-short-january = Jan
+month-short-february = Feb
+month-short-march = Mar
+month-short-april = Apr
+month-short-may = May
+month-short-june = Jun
+month-short-july = Jul
+month-short-august = Aug
+month-short-september = Sep
+month-short-october = Oct
+month-short-november = Nov
+month-short-december = Dec
+
 ## Year view
 year-day-events = { $count } { $count ->
         [one] event

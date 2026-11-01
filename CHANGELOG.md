@@ -5,6 +5,19 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- In the week and day views, the scrollbar no longer covers the right edge
+  of the last day's events, and the all-day band's columns line up with the
+  day headers and the hour grid.
+- The header title stays on one line. A week or agenda range that spans two
+  months is written "26 Oct – 1 Nov 2026"; spelt out, it wrapped onto a
+  second line in the header.
+- Search results keep clear of the scrollbar.
+- The attendee list's add and remove buttons have tooltips.
+- The event editor and the settings page no longer nest a scrollable inside
+  the drawer's own, which could never scroll.
+
 ## [1.5.2] - 2026-11-01
 
 ### Fixed

@@ -21,14 +21,14 @@ jobs:
     name: Metadata
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: Install validators
         run: |
           sudo apt-get update
           sudo apt-get install -y appstream desktop-file-utils
 
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
 
       - name: Validate desktop entries and AppStream metadata
         run: just validate-metadata
@@ -37,7 +37,7 @@ jobs:
     name: Check, lint, and test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       # libcosmic pulls in the Wayland, XKB, and OpenSSL stacks; the D-Bus
       # tests start a private dbus-daemon of their own.
@@ -54,7 +54,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: extractions/setup-just@v3
+      - uses: extractions/setup-just@v4
 
       - name: Formatting
         run: just fmt-check

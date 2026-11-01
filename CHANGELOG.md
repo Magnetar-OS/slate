@@ -5,6 +5,8 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+## [1.5.5] - 2026-11-01
+
 ### Changed
 
 - Built on cosmic-pim 4.1.1 and the latest releases of its other dependencies:
@@ -447,7 +449,8 @@ All notable user-facing changes to Slate. The format follows
   own writes (contacts, accounts, cache index).
 - Keyboard shortcuts work on non-Latin keyboard layouts.
 
-[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.5.4...HEAD
+[Unreleased]: https://github.com/Magnetar-OS/slate/compare/v1.5.5...HEAD
+[1.5.5]: https://github.com/Magnetar-OS/slate/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/Magnetar-OS/slate/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/Magnetar-OS/slate/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/Magnetar-OS/slate/compare/v1.5.1...v1.5.2

@@ -1163,9 +1163,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-accounts"
-version = "4.0.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84ff1599b281a9396eb9f4868570e823ecf4c38acbc2524cd07eaba59a4e6e9c"
+checksum = "68def73ba7bd543585d9b7b342fc034c5494615c6fe9775a6d0fca0bc3e22662"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
@@ -1185,9 +1185,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-auth"
-version = "4.0.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "001cd1091b1d1fbd10c160768fe3edb4f773094c474b145b7af05be59082e2ee"
+checksum = "b66cda5964d07ddfba28e8fb4377a7009466c8c7b0f0a1031160eab02e5c9058"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1204,9 +1204,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-caldav"
-version = "4.0.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e70b73bdbd453cbcaab732510bfc5e22bf51188e8e3a1896793f817acfd7319"
+checksum = "693a1f36441f31f3f31fb52d68443c63289a0c027db789d5b308d09b8655aaa9"
 dependencies = [
  "base64 0.23.1",
  "calcard",
@@ -1223,9 +1223,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-core"
-version = "4.0.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b16adf9ca822da896855c9b5202bd24e87124b49414da6839743d9a8ca5976a2"
+checksum = "0952ac1d51dd075e0efb63382fc43f417f2ee18790867e26214a1449eae51047"
 dependencies = [
  "base64 0.23.1",
  "calcard",
@@ -1245,9 +1245,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-sync"
-version = "4.0.1"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a677350f26751e30456b8fdf17411c1780b75d870e50cb108b3ebd4f5a35541"
+checksum = "044629469c4798575712e9277a295c5cde3e4a3b814ec4e4f4d585ddb5b3e93c"
 dependencies = [
  "cosmic-pim-accounts",
  "cosmic-pim-auth",
@@ -1612,7 +1612,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1770,7 +1770,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2667,7 +2667,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -3374,7 +3374,7 @@ version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a1886916523694cd6ea3d175f03a1e5010699a2a4cc13696d83d7bea1d80638"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3957,7 +3957,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5276,7 +5276,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5759,7 +5759,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5963,7 +5963,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6396,7 +6396,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7061,7 +7061,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

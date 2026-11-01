@@ -5,6 +5,18 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving an event no longer overwrites a version a sync pulled while the
+  editor was open, which the next push then replaced on the server with the
+  stale edit. The save is refused instead: the editor stays open and says
+  so, your version is kept beside the event's file, and saving again
+  replaces the other version on purpose.
+
+### Changed
+
+- Built on cosmic-pim 4.1.
+
 ## [1.5.3] - 2026-11-01
 
 ### Fixed

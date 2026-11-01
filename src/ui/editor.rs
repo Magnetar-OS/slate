@@ -35,6 +35,11 @@ pub enum TzField {
 pub struct Editor {
     /// `None` when creating; `Some` carries the file name and UID we must keep.
     pub original: Option<Event>,
+    /// The event file's state when the editor opened it, which the save is
+    /// made against: a sync that pulls a new version of the event meanwhile
+    /// makes the save a conflict rather than an overwrite. `None` for a new
+    /// event, and until the caller sets it.
+    pub opened: Option<cosmic_pim_core::atomic::FileState>,
     /// Set when the editor was opened from one *generated* instance of a
     /// series (not an override): the identity of that instance, which is what
     /// a "this event" edit or delete acts on. The scope prompt exists exactly
@@ -249,6 +254,7 @@ impl Editor {
         Self {
             occurrence: None,
             original: None,
+            opened: None,
             calendar_id,
             summary: String::new(),
             location: String::new(),
@@ -349,6 +355,7 @@ impl Editor {
 
         Self {
             occurrence: None,
+            opened: None,
             calendar_id: event.calendar_id.clone(),
             summary: event.summary.clone(),
             location: event.location.clone().unwrap_or_default(),

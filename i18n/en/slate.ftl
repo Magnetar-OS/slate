@@ -124,6 +124,8 @@ untitled-event = (No title)
 ## Errors
 error-load-calendars = Could not read your calendars.
 error-save-event = Could not save the event.
+# The event changed on disk while the editor was open — a sync, another app.
+error-save-conflict = This event was changed elsewhere while you were editing it, so nothing was overwritten. Your version was kept beside it as { $file }. Save again to replace the other version, or close the editor to keep it.
 error-delete-event = Could not delete the event.
 error-invalid-time-range = The end time must be after the start time.
 error-summary-required = Give the event a title.

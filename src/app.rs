@@ -2282,7 +2282,7 @@ impl cosmic::Application for AppModel {
                         // A generated instance of a series opens on its own
                         // dates, carrying its identity for the scope prompt.
                         // An override or a one-off opens as itself.
-                        let editor = match instant {
+                        let mut editor = match instant {
                             Some(instant)
                                 if event.rrule.is_some() && event.recurrence_id.is_none() =>
                             {
@@ -2290,6 +2290,14 @@ impl cosmic::Application for AppModel {
                             }
                             _ => Editor::from_event(&event, local),
                         };
+                        // What the save is made against, so a version a sync
+                        // pulls while this is open is not saved over.
+                        editor.opened = store
+                            .event_state(&event.calendar_id, &event.file_name)
+                            .unwrap_or_else(|why| {
+                                tracing::warn!(uid, %why, "could not read the event file's state");
+                                None
+                            });
                         self.editor = Some(editor.showing_alarms(&alarms, local, &self.config));
                         self.context_page = ContextPage::Editor;
                         self.core.window.show_context = true;
@@ -4880,7 +4888,8 @@ impl AppModel {
         let from = moved_from
             .as_ref()
             .map_or(event.calendar_id.as_str(), |original| &original.calendar_id);
-        let written = save_queued(&root, &touched, || save_moving(store, from, &event));
+        let opened = editor.opened;
+        let written = save_queued(&root, &touched, || save_moving(store, from, &event, opened));
 
         match written {
             Ok((Ok(()), queued)) => {
@@ -4890,11 +4899,39 @@ impl AppModel {
                 self.reload();
                 self.report_unqueued(queued)
             }
+            Ok((Err(crate::store::StoreError::Conflict { conflict, .. }), _)) => {
+                self.reload();
+                self.editor_conflict(&event, &conflict);
+                Task::none()
+            }
             Ok((Err(why), queued)) => {
                 self.reload();
                 self.report_failed(&format!("{}: {why}", fl!("error-save-event")), queued)
             }
             Err(why) => self.toast_error(&format!("{}: {why}", fl!("error-save-event"))),
+        }
+    }
+
+    /// The editor's save lost a race: the event's file changed since the
+    /// editor opened it — a sync pulled a new version, or another application
+    /// wrote it. Nothing was overwritten, and the edit was kept beside the
+    /// file. The editor stays open with the reason, and takes the file's
+    /// current state, so saving again replaces the other version on purpose;
+    /// closing the editor keeps it.
+    fn editor_conflict(&mut self, event: &crate::model::Event, conflict: &std::path::Path) {
+        let fresh = self.store.as_ref().and_then(|store| {
+            store
+                .event_state(&event.calendar_id, &event.file_name)
+                .ok()
+                .flatten()
+        });
+        let file = conflict.file_name().map_or_else(
+            || conflict.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        if let Some(editor) = self.editor.as_mut() {
+            editor.opened = fresh;
+            editor.error = Some(fl!("error-save-conflict", file = file));
         }
     }
 
@@ -4906,6 +4943,7 @@ impl AppModel {
         let (Some(instant), Some(master)) = (editor.occurrence, editor.original.clone()) else {
             return Task::none();
         };
+        let editor_opened = editor.opened;
         let Some(local) = self.store.as_ref().map(Store::local_timezone) else {
             return Task::none();
         };
@@ -4963,8 +5001,9 @@ impl AppModel {
         };
         let root = store.root().to_path_buf();
         let whole = matches!(scope, EditScope::All);
+        let opened = editor_opened;
         let written = save_queued(&root, &touched, || {
-            write_series_edit(store, &master, &event, whole)
+            write_series_edit(store, &master, &event, whole, opened)
         });
 
         match written {
@@ -4974,6 +5013,11 @@ impl AppModel {
                 self.core.window.show_context = false;
                 self.reload();
                 self.report_unqueued(queued)
+            }
+            Ok((Err(crate::store::StoreError::Conflict { conflict, .. }), _)) => {
+                self.reload();
+                self.editor_conflict(&event, &conflict);
+                Task::none()
             }
             Ok((Err(why), queued)) => {
                 self.reload();
@@ -5052,7 +5096,7 @@ impl AppModel {
             (series.calendar_id.as_str(), series.file_name.as_str()),
         ];
         let result = match save_queued(&root, &touched, || {
-            save_moving(store, &master.calendar_id, &series)
+            save_moving(store, &master.calendar_id, &series, None)
         }) {
             Ok((result, also)) => {
                 queued = queued.and(also);
@@ -5759,7 +5803,8 @@ fn whole_series_edit(
 }
 
 /// Saves `event`, moving it first from `from` when that is not the calendar
-/// it names.
+/// it names. A save in place is made against `opened`, the file's state when
+/// the editor opened it (see `Store::save_if_unchanged`).
 ///
 /// `Store::move_to_calendar` moves the whole event — a series with its
 /// changed occurrences and everything the model does not carry — and saves
@@ -5769,9 +5814,10 @@ fn save_moving(
     store: &mut Store,
     from: &str,
     event: &crate::model::Event,
+    opened: Option<cosmic_pim_core::atomic::FileState>,
 ) -> Result<(), crate::store::StoreError> {
     if from == event.calendar_id {
-        return store.save(event);
+        return store.save_if_unchanged(event, opened);
     }
     let mut leaving = event.clone();
     from.clone_into(&mut leaving.calendar_id);
@@ -5793,16 +5839,22 @@ fn write_series_edit(
     master: &crate::model::Event,
     event: &crate::model::Event,
     whole: bool,
+    opened: Option<cosmic_pim_core::atomic::FileState>,
 ) -> Result<(), crate::store::StoreError> {
-    let previous = if event.calendar_id == master.calendar_id {
-        master.clone()
-    } else {
+    let moved = event.calendar_id != master.calendar_id;
+    let previous = if moved {
         store.move_to_calendar(master, &event.calendar_id)?
+    } else {
+        master.clone()
     };
     if whole {
         store.save_series(&previous, event)
-    } else {
+    } else if moved {
         store.save(event)
+    } else {
+        // One instance, in the file the editor opened: made against that
+        // read, like a one-off's save.
+        store.save_if_unchanged(event, opened)
     }
 }
 
@@ -6399,7 +6451,7 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         let series = whole_series_edit(&master, edited, clicked, local);
-        write_series_edit(&mut store, &master, &series, true).unwrap();
+        write_series_edit(&mut store, &master, &series, true, None).unwrap();
 
         let tuesday = store
             .occurrences(
@@ -6577,6 +6629,47 @@ mod tests {
     }
 
     #[test]
+    fn an_editor_opened_before_a_pull_does_not_save_over_it() {
+        let (_dir, mut store) = temp_store();
+        let home = store.create_calendar("Home", PALETTE[0]).unwrap();
+        std::fs::write(
+            home.path.join("standup.ics"),
+            SERIES_WITH_A_CHANGED_INSTANCE,
+        )
+        .unwrap();
+        store.refresh().unwrap();
+
+        // The editor opens the event and takes the file's state.
+        let mut edited = store.event(&home.id, "standup").unwrap().unwrap();
+        let opened = store.event_state(&home.id, &edited.file_name).unwrap();
+
+        // A sync pulls a new version meanwhile (longer, so the state differs
+        // within the same second).
+        let mut pulled = edited.clone();
+        pulled.summary = "Standup, now in the big room".into();
+        store.save(&pulled).unwrap();
+
+        edited.summary = "Team standup".into();
+        let refused = save_moving(&mut store, &home.id, &edited, opened);
+        assert!(
+            matches!(refused, Err(crate::store::StoreError::Conflict { .. })),
+            "{refused:?}"
+        );
+        assert_eq!(
+            store.event(&home.id, "standup").unwrap().unwrap().summary,
+            "Standup, now in the big room"
+        );
+
+        // Saved again from the conflict, against the file as it is now.
+        let fresh = store.event_state(&home.id, &edited.file_name).unwrap();
+        save_moving(&mut store, &home.id, &edited, fresh).unwrap();
+        assert_eq!(
+            store.event(&home.id, "standup").unwrap().unwrap().summary,
+            "Team standup"
+        );
+    }
+
+    #[test]
     fn a_series_moved_to_another_calendar_keeps_its_changed_occurrences() {
         let (_dir, mut store) = temp_store();
         let home = store.create_calendar("Home", PALETTE[0]).unwrap();
@@ -6592,7 +6685,7 @@ mod tests {
         let mut edited = store.event(&home.id, "standup").unwrap().unwrap();
         edited.summary = "Team standup".into();
         edited.calendar_id.clone_from(&work.id);
-        save_moving(&mut store, &home.id, &edited).unwrap();
+        save_moving(&mut store, &home.id, &edited, None).unwrap();
 
         assert_eq!(
             shown_on_the_eleventh(&store),
@@ -6619,7 +6712,7 @@ mod tests {
 
         let mut series = master.clone();
         series.calendar_id.clone_from(&work.id);
-        write_series_edit(&mut store, &master, &series, true).unwrap();
+        write_series_edit(&mut store, &master, &series, true, None).unwrap();
 
         assert_eq!(
             shown_on_the_eleventh(&store),

@@ -15,7 +15,7 @@ All notable user-facing changes to Slate. The format follows
 
 ### Changed
 
-- Built on cosmic-ext-widgets 1.2.0, whose `header_button` replaces Slate's
+- Built on cosmic-ext-widgets 1.3.0, whose `header_button` replaces Slate's
   own copy of it.
 
 ## [1.5.1] - 2026-11-01

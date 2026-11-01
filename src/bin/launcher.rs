@@ -191,18 +191,14 @@ impl Plugin {
         if let Some(occurrence) = self.results.get(id) {
             let date = occurrence.start.date();
 
-            // The canonical launch path: double fork + setsid underneath, plus
-            // a systemd transient scope. A plain `Command::spawn` would leave
-            // the calendar a child of this plugin, which pop-launcher owns and
-            // reaps — closing the launcher would take the window with it. No
+            // See `slate::launch::spawn` for why not `Command::spawn`. No
             // activation token here: a pop-launcher plugin owns no surface to
             // bind one to, and the app raises its existing window itself.
             match self.runtime.as_ref() {
-                Some(runtime) => runtime.block_on(cosmic::desktop::spawn_desktop_exec(
+                Some(runtime) => runtime.block_on(slate::launch::spawn(
+                    APP_ID,
                     format!("slate --date={date}"),
-                    std::iter::empty::<(&str, &str)>(),
-                    Some(APP_ID),
-                    false,
+                    Vec::new(),
                 )),
                 None => tracing::warn!("no runtime; cannot launch the calendar"),
             }

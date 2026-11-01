@@ -21,6 +21,7 @@ pub mod config;
 pub mod handoff;
 pub mod i18n;
 pub mod key_bind;
+pub mod launch;
 pub mod meeting;
 pub mod quickadd;
 pub mod reminders;

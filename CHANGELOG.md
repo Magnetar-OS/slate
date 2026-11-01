@@ -5,6 +5,12 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Rebuilt against the current COSMIC libraries (libcosmic `95236a9`).
+- The calendar opened from the panel applet or the launcher runs as its own
+  unit of the user's systemd session, through libcosmic's new launcher.
+
 ## [1.4.0] - 2026-10-21
 
 ### Changed

@@ -562,25 +562,22 @@ fn exec_line(date: Option<NaiveDate>) -> String {
 
 /// Detaches the app from the panel and hands it the activation token.
 ///
-/// `spawn_desktop_exec` is the canonical launch path: a double fork with
-/// `setsid` underneath — a plain `Command::spawn` would leave the window a
-/// child of the panel, so restarting the panel would take the calendar with
-/// it — plus a systemd transient scope, so the new process belongs to the
-/// session. The token, passed under both names for Wayland and XWayland, is
+/// Through [`slate::launch::spawn`], so the window is not a child of the
+/// panel. The token, passed under both names for Wayland and XWayland, is
 /// what allows the window to raise itself; without it the compositor treats
 /// it as focus-stealing and leaves it flashing in the dock.
 async fn spawn(exec: &str, token: Option<String>) {
     let mut env = Vec::new();
     match token {
         Some(token) => {
-            env.push(("XDG_ACTIVATION_TOKEN", token.clone()));
-            env.push(("DESKTOP_STARTUP_ID", token));
+            env.push(("XDG_ACTIVATION_TOKEN".to_owned(), token.clone()));
+            env.push(("DESKTOP_STARTUP_ID".to_owned(), token));
         }
         // Not fatal. The window still opens; it just may not be given focus.
         None => tracing::debug!(exec, "no activation token; launching without one"),
     }
 
-    cosmic::desktop::spawn_desktop_exec(exec, env, Some(APP_ID), false).await;
+    slate::launch::spawn(APP_ID, exec.to_owned(), env).await;
 }
 
 /// Same debounced vdir watch the app uses, so the applet follows external edits.

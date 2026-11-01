@@ -5,6 +5,19 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The view switcher in the header bar sizes each tab to its label, so the
+  active tab no longer reads "Mont" at Spacious density or in a language
+  with longer names.
+- The header bar's buttons dim with the window controls when the window is
+  not focused.
+
+### Changed
+
+- Built on cosmic-ext-widgets 1.2.0, whose `header_button` replaces Slate's
+  own copy of it.
+
 ## [1.5.1] - 2026-11-01
 
 ### Changed

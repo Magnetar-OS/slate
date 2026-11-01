@@ -14,7 +14,7 @@ use cosmic::cosmic_config::{self, CosmicConfigEntry};
 use cosmic::iced::{Alignment, Length, Subscription, futures};
 use cosmic::prelude::*;
 use cosmic::widget::{self, about::About, menu, nav_bar, segmented_button};
-use cosmic_ext_widgets::{Mode as SidebarMode, SidebarState};
+use cosmic_ext_widgets::{Mode as SidebarMode, SidebarState, header_button};
 use futures::SinkExt;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -1235,11 +1235,7 @@ impl cosmic::Application for AppModel {
         // is `None` (see `nav_bar` below), so we place it. First in the row is
         // where the stock one sits, and it drives libcosmic's own nav-bar state
         // rather than a parallel flag of ours.
-        let focused = self
-            .core
-            .focus_chain()
-            .iter()
-            .any(|id| Some(*id) == self.core.main_window_id());
+        let focused = self.header_focused();
         let nav_toggle = widget::nav_bar_toggle()
             .active(self.sidebar.mode() != SidebarMode::Hidden)
             .selected(focused)
@@ -1256,11 +1252,14 @@ impl cosmic::Application for AppModel {
                 // controls, and it does not: the button was being clipped in
                 // half. There is room on the left, and the action is a sibling
                 // of the View menu anyway.
-                .push(header_icon(
-                    "list-add-symbolic",
-                    fl!("new-event"),
-                    Message::NewEvent,
-                ))
+                .push(
+                    header_button(
+                        widget::icon::from_name("list-add-symbolic"),
+                        fl!("new-event"),
+                        Message::NewEvent,
+                    )
+                    .focused(focused),
+                )
                 .into(),
         ]
     }
@@ -1276,14 +1275,25 @@ impl cosmic::Application for AppModel {
         // anchor nothing on screen reads, and "Today" would appear to do
         // nothing at all.
         if self.view().is_dated() {
+            let focused = self.header_focused();
             row = row
-                .push(header_icon(
-                    "go-previous-symbolic",
-                    fl!("previous"),
-                    Message::Previous,
-                ))
+                .push(
+                    header_button(
+                        widget::icon::from_name("go-previous-symbolic"),
+                        fl!("previous"),
+                        Message::Previous,
+                    )
+                    .focused(focused),
+                )
                 .push(widget::button::standard(fl!("today")).on_press(Message::Today))
-                .push(header_icon("go-next-symbolic", fl!("next"), Message::Next));
+                .push(
+                    header_button(
+                        widget::icon::from_name("go-next-symbolic"),
+                        fl!("next"),
+                        Message::Next,
+                    )
+                    .focused(focused),
+                );
         }
 
         vec![
@@ -1304,15 +1314,14 @@ impl cosmic::Application for AppModel {
                 .align_y(Alignment::Center)
                 .spacing(spacing.space_xxs)
                 .push(
-                    // A fixed width is unavoidable: the control is `Fill`
-                    // internally, so `Shrink` on the container does not
-                    // constrain it and it swallows the whole header bar.
-                    // Sized per tab so that adding a view widens the strip
-                    // instead of silently truncating every label.
+                    // `Shrink` on the control itself, not on a container: it
+                    // is `Fill` by default and swallows the header bar, and
+                    // a fixed width truncated the active tab ("Mont") as
+                    // soon as the density or the language made a label
+                    // wider than the guess. Shrunk, each tab is measured.
                     widget::segmented_control::horizontal(&self.views)
-                        .on_activate(Message::ViewSelected)
-                        .apply(widget::container)
-                        .width(Length::Fixed(VIEW_TAB_WIDTH * ViewKind::ALL.len() as f32)),
+                        .width(Length::Shrink)
+                        .on_activate(Message::ViewSelected),
                 )
                 .into(),
         ]
@@ -2811,6 +2820,15 @@ impl AppModel {
             .active_data::<ViewKind>()
             .copied()
             .unwrap_or(self.config.view)
+    }
+
+    /// Whether the header bar draws as focused: the test libcosmic applies
+    /// to its window controls, so the header buttons dim with them.
+    fn header_focused(&self) -> bool {
+        self.core
+            .focus_chain()
+            .iter()
+            .any(|id| Some(*id) == self.core.main_window_id())
     }
 
     fn calendars(&self) -> &[CalendarMeta] {
@@ -5344,38 +5362,6 @@ fn file_label(path: &std::path::Path) -> String {
         |n| n.to_string_lossy().into(),
     )
 }
-
-/// A header-bar icon button, built the way libcosmic builds its own.
-///
-/// The three sizing pieces all matter, and getting them wrong is what made the "+"
-/// render as half a glyph: `icon_size` sizes the icon *within* the button
-/// (`icon::size()` on the handle does not, and leaves the natural size to
-/// overflow and clip), `padding(8)` gives it the header's button box, and the
-/// `HeaderBar` class matches the window controls beside it.
-fn header_icon(name: &'static str, label: String, on_press: Message) -> Element<'static, Message> {
-    let button = widget::icon::from_name(name)
-        .apply(widget::button::icon)
-        .icon_size(16)
-        .padding(8)
-        .class(cosmic::theme::Button::HeaderBar)
-        .on_press(on_press);
-
-    // The tooltip is the button's only name: a glyph on its own tells a
-    // screen reader nothing, and tells a new user very little.
-    widget::tooltip(
-        button,
-        widget::text::caption(label),
-        widget::tooltip::Position::Bottom,
-    )
-    .into()
-}
-
-/// Width allotted to one tab of the view selector.
-/// Width allotted to one tab of the view selector.
-///
-/// Wide enough for the longest label plus the checkmark the active tab
-/// prefixes; the whole strip is this times the number of views.
-const VIEW_TAB_WIDTH: f32 = 96.0;
 
 fn view_label(kind: ViewKind) -> String {
     match kind {

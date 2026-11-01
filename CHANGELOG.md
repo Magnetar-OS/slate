@@ -5,6 +5,10 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Built on cosmic-pim 4 (rusqlite 0.41).
+
 ## [1.5.0] - 2026-11-01
 
 ### Changed

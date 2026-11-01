@@ -1162,9 +1162,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-accounts"
-version = "3.3.0"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5088b2448d79396cd606097dc401178d29cbe2a94d44ad8ed192473e80501c5a"
+checksum = "762c74180a54b7d2660ad06883a3c8ad15c76e45f48000f31b6b14c2031267fa"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
@@ -1184,9 +1184,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-auth"
-version = "3.3.0"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36628753e486a4465aca3b4c1ffd783e354bf5447ae44117f221ee0b725dfcce"
+checksum = "a8b87b8062f103f922e478b1c241905427dbc4a8f39c90c3b0e254975c949bef"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1203,9 +1203,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-caldav"
-version = "3.3.0"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb5b35a0c9758f9990fdcde42f64b0034a71ab049046443eea1798babced00a7"
+checksum = "7732997177144518f761f2e5011b3934cc8e6764fc8026e6bb860d4d4127eca8"
 dependencies = [
  "base64 0.23.1",
  "calcard",
@@ -1222,9 +1222,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-core"
-version = "3.3.0"
+version = "4.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "310a1b6e178676efc36a958c8cb204799e22e71f588427e8d30b7bd1b62413bb"
+checksum = "b16adf9ca822da896855c9b5202bd24e87124b49414da6839743d9a8ca5976a2"
 dependencies = [
  "base64 0.23.1",
  "calcard",
@@ -1244,9 +1244,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-sync"
-version = "3.3.0"
+version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9245052b48a0eceba664596682b07366dd50ec41577e0f097d9f7c21db72830"
+checksum = "0eb6f3d89cf4b931380021207376cb459c99c8e6c3b7af2692c6660fb20f8914"
 dependencies = [
  "cosmic-pim-accounts",
  "cosmic-pim-auth",
@@ -1611,7 +1611,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1769,7 +1769,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2666,7 +2666,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -3373,7 +3373,7 @@ version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a1886916523694cd6ea3d175f03a1e5010699a2a4cc13696d83d7bea1d80638"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3528,9 +3528,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.38.2"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
 dependencies = [
  "cc",
  "pkg-config",
@@ -3956,7 +3956,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5183,9 +5183,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.40.2"
+version = "0.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+checksum = "da9bba6f3506135e120a6586df05be18b48d18896600646a4bec8f993d91a594"
 dependencies = [
  "bitflags 2.13.2",
  "chrono",
@@ -5276,7 +5276,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5759,7 +5759,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5965,7 +5965,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6398,7 +6398,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7063,7 +7063,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

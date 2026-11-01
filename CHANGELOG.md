@@ -17,6 +17,8 @@ All notable user-facing changes to Slate. The format follows
 - The attendee list's add and remove buttons have tooltips.
 - The event editor and the settings page no longer nest a scrollable inside
   the drawer's own, which could never scroll.
+- With more calendars than the sidebar rail can show, its scrollbar sits
+  beside the calendars instead of over them (cosmic-ext-widgets 1.3.1).
 
 ## [1.5.2] - 2026-11-01
 

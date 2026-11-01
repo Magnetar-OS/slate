@@ -50,9 +50,9 @@ cosmic-pim-caldav = "4.1"
 cosmic-ext-widgets = { git = "https://github.com/Magnetar-OS/cosmic-ext-widgets.git", tag = "v1.3.1" }
 i18n-embed = { version = "0.16", features = ["fluent-system", "desktop-requester"] }
 i18n-embed-fl = "0.10"
-rust-embed = "8.12"
+rust-embed = "8.13"
 open = "5.4"
-tokio = { version = "1.53", features = ["full"] }
+tokio = { version = "1.54", features = ["full"] }
 
 # --- time ---
 # chrono is the domain time type the model speaks.
@@ -60,7 +60,7 @@ chrono = { version = "0.4.45", features = ["clock", "serde"] }
 chrono-tz = "0.10.4"
 # jiff appears only at the libcosmic boundary — `widget::calendar` speaks
 # `jiff::civil::Date`. Kept in lockstep with the version libcosmic resolves.
-jiff = "0.2.35"
+jiff = "0.2.38"
 
 # iCalendar parsing, recurrence expansion, SQLite, and directory watching all
 # moved to cosmic-pim-core with the storage layer; the app reaches them through

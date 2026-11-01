@@ -5,6 +5,11 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Built on cosmic-pim 4.1.1 and the latest releases of its other dependencies:
+  tokio 1.54, jiff 0.2.38 and rust-embed 8.13.
+
 ## [1.5.4] - 2026-11-01
 
 ### Fixed

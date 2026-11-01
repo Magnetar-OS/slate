@@ -1163,9 +1163,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-accounts"
-version = "4.1.0"
+version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68def73ba7bd543585d9b7b342fc034c5494615c6fe9775a6d0fca0bc3e22662"
+checksum = "cebba0018d2d0b1eced1b3c7574081e8b07f2fe62761ee74aec42de088993b36"
 dependencies = [
  "base64 0.23.1",
  "chacha20poly1305",
@@ -1185,9 +1185,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-auth"
-version = "4.1.0"
+version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b66cda5964d07ddfba28e8fb4377a7009466c8c7b0f0a1031160eab02e5c9058"
+checksum = "1e91716e95a72af9a6606c17be50bed3be316215c4bdbe112897b4e6eed0f9db"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -1204,9 +1204,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-caldav"
-version = "4.1.0"
+version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "693a1f36441f31f3f31fb52d68443c63289a0c027db789d5b308d09b8655aaa9"
+checksum = "c808047f2cc7e047a935c50ffd374e72875fa8588ec7bb7db73ecd34094c5226"
 dependencies = [
  "base64 0.23.1",
  "calcard",
@@ -1223,9 +1223,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-core"
-version = "4.1.0"
+version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0952ac1d51dd075e0efb63382fc43f417f2ee18790867e26214a1449eae51047"
+checksum = "da08b3592f06f4e860c626d2e4fca206c1b08694f030228463c27d3125323420"
 dependencies = [
  "base64 0.23.1",
  "calcard",
@@ -1245,9 +1245,9 @@ dependencies = [
 
 [[package]]
 name = "cosmic-pim-sync"
-version = "4.1.0"
+version = "4.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "044629469c4798575712e9277a295c5cde3e4a3b814ec4e4f4d585ddb5b3e93c"
+checksum = "64d968ce95b143f8d81d86b25e4c32268afbf1f0928320d56fc2e746aa1c9782"
 dependencies = [
  "cosmic-pim-accounts",
  "cosmic-pim-auth",

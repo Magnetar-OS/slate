@@ -7,6 +7,7 @@ All notable user-facing changes to Slate. The format follows
 
 ### Changed
 
+- Rebuilt against the current COSMIC libraries (libcosmic `dd108aa`).
 - Built on zbus 6 and cosmic-pim 5, as libcosmic now is, and on jiff 0.2.39.
   Replies still reach an Envelope from before Scheduling2.
 

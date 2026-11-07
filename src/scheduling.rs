@@ -137,9 +137,7 @@ pub async fn send_reply(
     let reply = match sent {
         // An Envelope from before `Scheduling2`. It cannot be told which
         // address to send from, and sends from the account's primary one.
-        Err(zbus::Error::MethodError(error, ..))
-            if error.as_str() == "org.freedesktop.DBus.Error.UnknownInterface" =>
-        {
+        Err(zbus::Error::FDO(error)) if matches!(*error, zbus::fdo::Error::UnknownInterface(_)) => {
             conn.call_method(
                 Some(ENVELOPE_NAME),
                 ENVELOPE_PATH,

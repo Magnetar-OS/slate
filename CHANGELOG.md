@@ -5,6 +5,11 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Built on zbus 6 and cosmic-pim 5, as libcosmic now is, and on jiff 0.2.39.
+  Replies still reach an Envelope from before Scheduling2.
+
 ## [1.5.5] - 2026-11-01
 
 ### Changed

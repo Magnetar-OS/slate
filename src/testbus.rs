@@ -67,7 +67,6 @@ impl PrivateBus {
     /// A new connection to this bus.
     pub async fn connect(&self) -> zbus::Connection {
         zbus::connection::Builder::address(self.address.as_str())
-            .expect("a valid bus address")
             .build()
             .await
             .expect("connecting to the private bus")

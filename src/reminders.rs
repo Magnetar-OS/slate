@@ -629,7 +629,7 @@ pub async fn claim_ownership(
             OWNER_BUS_NAME,
             // Do not queue: if someone else has it, we want to know now rather
             // than silently take over later.
-            RequestNameFlags::DoNotQueue.into(),
+            RequestNameFlags::DO_NOT_QUEUE,
         )
         .await;
 
@@ -637,7 +637,7 @@ pub async fn claim_ownership(
         Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => Ok(Some(connection)),
         Ok(_) => Ok(None),
 
-        // With `DoNotQueue`, zbus reports a name that is already held as an
+        // With `DO_NOT_QUEUE`, zbus reports a name that is already held as an
         // error rather than a reply variant. That is a normal outcome here — a
         // second daemon should bow out quietly — so it must not be reported as a
         // failure, or systemd's `Restart=on-failure` would spin forever.
@@ -834,9 +834,10 @@ pub async fn on_sleep(mut on_change: impl FnMut(bool)) {
     let rule = match MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .interface("org.freedesktop.login1.Manager")
-        .and_then(|builder| builder.member("PrepareForSleep"))
+        .member("PrepareForSleep")
+        .build()
     {
-        Ok(builder) => builder.build(),
+        Ok(rule) => rule,
         Err(why) => {
             tracing::debug!(%why, "could not build the sleep match rule");
             return;

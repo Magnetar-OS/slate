@@ -28,17 +28,17 @@ publish = false
 # For local work against the sibling checkout, uncomment the
 # `[patch.crates-io]` block at the bottom of this file — do not reintroduce
 # paths here, or a release build would silently prefer the working tree.
-cosmic-pim-core = "4.1"
+cosmic-pim-core = "5.0"
 # Accounts, credentials, and the CalDAV sync cycle. Used by the daemon (which
 # runs sync on a timer) and by the app's settings UI.
-cosmic-pim-accounts = "4.1"
+cosmic-pim-accounts = "5.0"
 # Without the mail pass: Slate syncs calendars and address books only, and the
 # default feature would pull in the mail and OpenPGP stacks for nothing.
-cosmic-pim-sync = { version = "4.1", default-features = false }
+cosmic-pim-sync = { version = "5.0", default-features = false }
 # ICS feed subscriptions. Used directly by the daemon, which drives feed
 # refreshes on its sync tick — the account-based sync engine deliberately does
 # not schedule them, because a feed is a URL, not an account.
-cosmic-pim-caldav = "4.1"
+cosmic-pim-caldav = "5.0"
 
 # --- COSMIC / UI ---
 # Animated sidebar collapse and the icon-only rail — neither exists in
@@ -60,7 +60,7 @@ chrono = { version = "0.4.45", features = ["clock", "serde"] }
 chrono-tz = "0.10.4"
 # jiff appears only at the libcosmic boundary — `widget::calendar` speaks
 # `jiff::civil::Date`. Kept in lockstep with the version libcosmic resolves.
-jiff = "0.2.38"
+jiff = "0.2.39"
 
 # iCalendar parsing, recurrence expansion, SQLite, and directory watching all
 # moved to cosmic-pim-core with the storage layer; the app reaches them through
@@ -74,7 +74,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 notify-rust = { version = "4.18", default-features = false, features = ["z"] }
 # Already in the tree via notify-rust's zbus backend. Used directly so the app and
 # the reminder daemon can agree on which of them owns notifications.
-zbus = "5.19"
+zbus = "6.2"
 # `slate::launch` — the canonical launch path: each window the applet and the
 # launcher plugin open is its own unit of the user's systemd session, not a
 # child of whatever opened it. libcosmic's launcher crate, from the same

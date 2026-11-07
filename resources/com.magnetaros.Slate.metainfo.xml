@@ -106,7 +106,7 @@
   </branding>
 
   <releases>
-    <release version="1.5.5" date="2026-11-01"> <!-- x-release-kit-version-date -->
+    <release version="1.5.6" date="2026-11-07"> <!-- x-release-kit-version-date -->
       <description>
         <p>The first release.</p>
         <ul>

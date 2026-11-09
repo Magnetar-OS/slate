@@ -3,11 +3,11 @@
 
 <img src="https://raw.githubusercontent.com/Magnetar-OS/.github/main/profile/assets/repos/slate.svg" width="100%" alt="Slate — Calendar and tasks for the COSMIC desktop: plain iCalendar files, CalDAV sync, reminders, a panel applet and a launcher plugin.">
 
-<br><br>
-
 <a href="https://magnetaros.com"><img src="https://raw.githubusercontent.com/Magnetar-OS/.github/main/profile/assets/pill-site.svg" height="40" alt="magnetaros.com"></a>&nbsp;
 <a href="https://github.com/Magnetar-OS/slate/releases"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Magnetar-OS/.github/main/profile/assets/pill-releases-dark.svg"><img src="https://raw.githubusercontent.com/Magnetar-OS/.github/main/profile/assets/pill-releases-light.svg" height="40" alt="Releases"></picture></a>&nbsp;
 <a href="https://github.com/orgs/Magnetar-OS/repositories"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/Magnetar-OS/.github/main/profile/assets/pill-repos-dark.svg"><img src="https://raw.githubusercontent.com/Magnetar-OS/.github/main/profile/assets/pill-repos-light.svg" height="40" alt="All repositories"></picture></a>
+
+<br>
 
 </div>
 <!-- /magnetar:header -->

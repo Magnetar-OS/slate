@@ -110,7 +110,7 @@ Four binaries share one library:
 
 ## Building
 
-Requires Rust 1.99+ (pinned by `rust-toolchain.toml`) and the usual libcosmic build dependencies. On Arch/CachyOS:
+Requires Rust 1.100+ (pinned by `rust-toolchain.toml`) and the usual libcosmic build dependencies. On Arch/CachyOS:
 
 ```sh
 sudo pacman -S --needed rust cmake just pkgconf expat fontconfig freetype2 libxkbcommon

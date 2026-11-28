@@ -5,6 +5,11 @@ All notable user-facing changes to Slate. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Built with Rust 1.100.1, now the minimum supported version (was 1.100.0).
+- Built on cosmic-pim 7 and jiff 1.0.3.
+
 ## [1.5.7] - 2026-11-20
 
 ### Changed
